@@ -1,0 +1,28 @@
+name: Slack Notify
+description: Send a Slack notification (used by review workflows)
+
+inputs:
+  webhook_url:
+    required: true
+    description: Slack webhook URL
+  message:
+    required: true
+    description: Message text to send
+
+runs:
+  using: composite
+  steps:
+    - name: Send notification
+      shell: bash
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.webhook_url }}
+        INPUT_MESSAGE: ${{ inputs.message }}
+      run: |
+        if [ -z "$SLACK_WEBHOOK_URL" ]; then
+          echo "::warning::SLACK_WEBHOOK_URL is empty — skipping notification"
+          exit 0
+        fi
+        PAYLOAD=$(jq -n --arg text "$INPUT_MESSAGE" '{text: $text}')
+        curl -sf -X POST "$SLACK_WEBHOOK_URL" \
+          -H 'Content-Type: application/json' \
+          -d "$PAYLOAD"

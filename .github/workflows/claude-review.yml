@@ -1,0 +1,119 @@
+name: Claude Review (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      stack:
+        description: 'Stack-specific prompt to load from prompts/<stack>.md (e.g. nestjs-fastify-drizzle)'
+        type: string
+        required: true
+      runner:
+        description: 'JSON-encoded runs-on value (e.g. "ubuntu-latest" or "[\"self-hosted\",\"aws\",\"spot\"]")'
+        type: string
+        default: '"ubuntu-latest"'
+      ref:
+        description: 'Pinned ref of this central repo to load prompts from (tag / branch / sha)'
+        type: string
+        default: 'v1'
+      slack_notify:
+        description: 'Whether to send a Slack notification after the run'
+        type: boolean
+        default: false
+      extra_prompt:
+        description: 'Optional repo-specific addendum appended after the stack prompt'
+        type: string
+        default: ''
+    secrets:
+      claude_oauth_token:
+        required: true
+      slack_webhook_url:
+        required: false
+
+jobs:
+  claude:
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' &&
+       contains(github.event.comment.body, '@claude'))
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout consumer repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Checkout review action repo (prompts)
+        uses: actions/checkout@v6
+        with:
+          repository: tikiti-technologies/claude-review-action
+          ref: ${{ inputs.ref }}
+          path: .claude-review-action
+          token: ${{ github.token }}
+
+      - name: Compose prompt
+        id: prompt
+        run: |
+          set -euo pipefail
+          ROOT=".claude-review-action"
+          BASE="$ROOT/prompts/base.md"
+          STACK="$ROOT/prompts/${{ inputs.stack }}.md"
+
+          if [ ! -f "$BASE" ]; then
+            echo "::error::base prompt not found at $BASE"; exit 1
+          fi
+          if [ ! -f "$STACK" ]; then
+            echo "::error::stack prompt '${{ inputs.stack }}' not found at $STACK"; exit 1
+          fi
+
+          {
+            echo "REPO: ${{ github.repository }}"
+            echo "PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}"
+            echo ""
+            cat "$BASE"
+            echo ""
+            cat "$STACK"
+            if [ -n "${{ inputs.extra_prompt }}" ]; then
+              echo ""
+              echo "## Repo-specific notes"
+              echo ""
+              echo "${{ inputs.extra_prompt }}"
+            fi
+          } > /tmp/prompt.md
+
+          {
+            echo "PROMPT<<PROMPT_EOF"
+            cat /tmp/prompt.md
+            echo "PROMPT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_oauth_token }}
+          track_progress: true
+          include_fix_links: true
+          classify_inline_comments: true
+          prompt: ${{ steps.prompt.outputs.PROMPT }}
+
+      - name: Notify Slack
+        if: always() && inputs.slack_notify && github.event_name == 'pull_request'
+        uses: ./.claude-review-action/actions/slack-notify
+        with:
+          webhook_url: ${{ secrets.slack_webhook_url }}
+          message: |
+            🤖 *Claude* reviewed PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+            Repo: ${{ github.repository }} | Status: ${{ steps.claude-review.outcome == 'success' && '✅ Completed' || '❌ Failed' }}
+            <${{ github.event.pull_request.html_url }}|View PR>
