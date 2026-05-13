@@ -73,7 +73,7 @@ jobs:
       - name: Checkout review action repo (prompts)
         uses: actions/checkout@v6
         with:
-          repository: tikiti-technologies/claude-review-action
+          repository: jadedm/claude-review-action
           ref: ${{ inputs.ref }}
           path: .claude-review-action
           token: ${{ github.token }}
