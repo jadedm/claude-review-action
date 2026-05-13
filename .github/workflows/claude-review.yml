@@ -20,7 +20,11 @@ on:
         type: boolean
         default: false
       extra_prompt:
-        description: 'Optional repo-specific addendum appended after the stack prompt'
+        description: 'Optional repo-specific addendum appended after the stack prompt. Use this for short inline notes; for long-form content prefer extra_prompt_path.'
+        type: string
+        default: ''
+      extra_prompt_path:
+        description: 'Optional path (relative to the consumer repo root) to a markdown file whose contents are appended after the stack prompt — e.g. .github/review-extras.md. Cleaner than a multi-line YAML string for long-form repo-specific conventions. If both extra_prompt and extra_prompt_path are set, both are appended (file contents first, then inline string).'
         type: string
         default: ''
     secrets:
@@ -77,6 +81,22 @@ jobs:
             echo "::error::stack prompt '${{ inputs.stack }}' not found at $STACK"; exit 1
           fi
 
+          # Optional repo-specific addendum from a file inside the
+          # consumer repo. Useful when the inline `extra_prompt` string
+          # gets too long to maintain in YAML. If both are set, file
+          # contents render first, then the inline string — both under
+          # the same "Repo-specific notes" heading.
+          EXTRA_PATH="${{ inputs.extra_prompt_path }}"
+          EXTRAS_RENDERED=0
+          render_extras_header_once() {
+            if [ "$EXTRAS_RENDERED" -eq 0 ]; then
+              echo ""
+              echo "## Repo-specific notes"
+              echo ""
+              EXTRAS_RENDERED=1
+            fi
+          }
+
           {
             echo "REPO: ${{ github.repository }}"
             echo "PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}"
@@ -84,10 +104,16 @@ jobs:
             cat "$BASE"
             echo ""
             cat "$STACK"
+            if [ -n "$EXTRA_PATH" ]; then
+              if [ -f "$EXTRA_PATH" ]; then
+                render_extras_header_once
+                cat "$EXTRA_PATH"
+              else
+                echo "::warning::extra_prompt_path '$EXTRA_PATH' not found in consumer repo — skipping" >&2
+              fi
+            fi
             if [ -n "${{ inputs.extra_prompt }}" ]; then
-              echo ""
-              echo "## Repo-specific notes"
-              echo ""
+              render_extras_header_once
               echo "${{ inputs.extra_prompt }}"
             fi
           } > /tmp/prompt.md
