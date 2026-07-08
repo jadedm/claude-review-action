@@ -224,3 +224,9 @@ Background, design choices, and operational notes: [manishj.com/garden/running-a
 ## License
 
 [MIT](./LICENSE)
+
+---
+
+**Built by [Manish Jadhav](https://manishj.com)**, engineer & technical consultant.
+
+Need something like this designed or built? [Inoltro](https://inoltro.ai) is my studio.
