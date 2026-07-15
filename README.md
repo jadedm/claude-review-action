@@ -157,6 +157,12 @@ gh secret set GEMINI_API_KEY          --repo <owner>/<repo>
 gh secret set SLACK_WEBHOOK_URL       --repo <owner>/<repo>
 ```
 
+> **Use repo-level secrets — not org-level — for private repos.** On the GitHub **Free** org plan, organisation-level Actions secrets are **not available to private repositories**: `${{ secrets.X }}` silently resolves to empty in the workflow (the job runs but the API call 401/403s). Set secrets on the repo (as above) or upgrade to Team/Enterprise.
+>
+> **`gh secret set` without `--body` reads from stdin** (an interactive paste prompt). In a non-interactive shell it sets an **empty** value with no error and the timestamp still updates. Pass `--body "<value>"`, pipe the value, or use the repo Settings UI.
+
+**Claude auth via the GitHub App.** Once the [Claude GitHub App](https://github.com/apps/claude) is installed on the consumer repo, `claude_oauth_token` is **optional** — the App provides authentication, so Claude runs even with the token empty/unset. **Gemini has no such fallback**: `gemini_api_key` is always required.
+
 ## Adding a new stack
 
 1. Create `prompts/<stack-name>.md` with stack-specific review conventions. Keep it project-agnostic — repo-specific things go in `extra_prompt` / `extra_prompt_path` on each consumer.
