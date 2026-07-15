@@ -206,6 +206,16 @@ permissions:
 
 Without these, the effective `GITHUB_TOKEN` in the reusable workflow falls back to the repo's default (typically read-only on private repos), and the actual review-posting / Slack-notify / OIDC steps silently fail.
 
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Gemini run shows **0 jobs** / *"This run likely failed because of a workflow file issue"* | Invalid YAML in the called reusable — e.g. a heredoc body dedented below its `run: \|` block ends the block scalar early | Validate with a real YAML parser (`python3 -c "import yaml;yaml.safe_load(open('f'))"`); keep multi-line content in a `prompts/*.md` file and `cat` it, not an inline heredoc |
+| Reviewer job runs but the API returns **401/403 "unregistered callers"** and the step's env shows the key **blank** (not `***`) | `${{ secrets.X }}` resolved to empty — most often an **org-level secret on a GitHub Free-plan org, which is not available to private repositories** | Set the secret at the **repo** level: `gh secret set X --repo <owner>/<repo> --body "…"` (or upgrade the org to Team/Enterprise) |
+| Secret "set" but still empty at runtime; its timestamp updates each attempt | `gh secret set` **without `--body`** reads the value from **stdin** (interactive paste). In a non-interactive shell it stores an **empty** value with no error | Pass `--body "<value>"`, pipe the value, or use the repo Settings UI (interactive in a real terminal is fine) |
+| Claude step fails: **"Claude Code is not installed on this repository"** | The Claude GitHub App isn't installed on the repo | Install <https://github.com/apps/claude> on the repo — after that, `claude_oauth_token` is optional |
+| Claude green but Gemini fails on the key | Claude authenticates via the **GitHub App** (token optional); **Gemini has no App fallback** | Ensure `gemini_api_key` is a **repo** secret (see the Free-plan note above) |
+
 ## Layout
 
 ```
