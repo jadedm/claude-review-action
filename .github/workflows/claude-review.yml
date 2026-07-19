@@ -68,17 +68,27 @@ jobs:
 
       - name: Compose prompt
         id: prompt
+        env:
+          # IMPORTANT: pass user-controlled inputs via env, NEVER interpolate
+          # ${{ inputs.* }} directly into bash. Direct interpolation lets
+          # backticks / $(...) inside a consumer's extra_prompt run as shell
+          # commands in the runner where claude_oauth_token is exported.
+          STACK: ${{ inputs.stack }}
+          EXTRA_PROMPT: ${{ inputs.extra_prompt }}
+          EXTRA_PROMPT_PATH: ${{ inputs.extra_prompt_path }}
+          REPO_FULL_NAME: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
           set -euo pipefail
           ROOT=".claude-review-action"
           BASE="$ROOT/prompts/base.md"
-          STACK="$ROOT/prompts/${{ inputs.stack }}.md"
+          STACK_FILE="$ROOT/prompts/${STACK}.md"
 
           if [ ! -f "$BASE" ]; then
             echo "::error::base prompt not found at $BASE"; exit 1
           fi
-          if [ ! -f "$STACK" ]; then
-            echo "::error::stack prompt '${{ inputs.stack }}' not found at $STACK"; exit 1
+          if [ ! -f "$STACK_FILE" ]; then
+            echo "::error::stack prompt '${STACK}' not found at $STACK_FILE"; exit 1
           fi
 
           # Optional repo-specific addendum from a file inside the
@@ -86,7 +96,6 @@ jobs:
           # gets too long to maintain in YAML. If both are set, file
           # contents render first, then the inline string — both under
           # the same "Repo-specific notes" heading.
-          EXTRA_PATH="${{ inputs.extra_prompt_path }}"
           EXTRAS_RENDERED=0
           render_extras_header_once() {
             if [ "$EXTRAS_RENDERED" -eq 0 ]; then
@@ -98,23 +107,23 @@ jobs:
           }
 
           {
-            echo "REPO: ${{ github.repository }}"
-            echo "PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}"
+            echo "REPO: ${REPO_FULL_NAME}"
+            echo "PR NUMBER: ${PR_NUMBER}"
             echo ""
             cat "$BASE"
             echo ""
-            cat "$STACK"
-            if [ -n "$EXTRA_PATH" ]; then
-              if [ -f "$EXTRA_PATH" ]; then
+            cat "$STACK_FILE"
+            if [ -n "$EXTRA_PROMPT_PATH" ]; then
+              if [ -f "$EXTRA_PROMPT_PATH" ]; then
                 render_extras_header_once
-                cat "$EXTRA_PATH"
+                cat "$EXTRA_PROMPT_PATH"
               else
-                echo "::warning::extra_prompt_path '$EXTRA_PATH' not found in consumer repo — skipping" >&2
+                echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' not found in consumer repo — skipping" >&2
               fi
             fi
-            if [ -n "${{ inputs.extra_prompt }}" ]; then
+            if [ -n "$EXTRA_PROMPT" ]; then
               render_extras_header_once
-              echo "${{ inputs.extra_prompt }}"
+              printf '%s\n' "$EXTRA_PROMPT"
             fi
           } > /tmp/prompt.md
 
