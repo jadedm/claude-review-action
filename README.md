@@ -161,7 +161,7 @@ gh secret set SLACK_WEBHOOK_URL       --repo <owner>/<repo>
 >
 > **`gh secret set` without `--body` reads from stdin** (an interactive paste prompt). In a non-interactive shell it sets an **empty** value with no error and the timestamp still updates. Pass `--body "<value>"`, pipe the value, or use the repo Settings UI.
 
-**Claude auth via the GitHub App.** Once the [Claude GitHub App](https://github.com/apps/claude) is installed on the consumer repo, `claude_oauth_token` is **optional** — the App provides authentication, so Claude runs even with the token empty/unset. **Gemini has no such fallback**: `gemini_api_key` is always required.
+**Claude auth — install the App *and* set the token.** Install the [Claude GitHub App](https://github.com/apps/claude) on the consumer repo (it handles posting), **and** set `claude_oauth_token` (generate via `claude setup-token`). The App alone is **not sufficient**: it may cover a small one-off `pull_request` review, but the `@claude` comment trigger and larger/subsequent reviews use the **direct Anthropic API**, which requires the token (`Environment variable validation failed: … ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN / WIF is required`). Gemini likewise requires `gemini_api_key`.
 
 ## Adding a new stack
 
@@ -213,8 +213,8 @@ Without these, the effective `GITHUB_TOKEN` in the reusable workflow falls back 
 | Gemini run shows **0 jobs** / *"This run likely failed because of a workflow file issue"* | Invalid YAML in the called reusable — e.g. a heredoc body dedented below its `run: \|` block ends the block scalar early | Validate with a real YAML parser (`python3 -c "import yaml;yaml.safe_load(open('f'))"`); keep multi-line content in a `prompts/*.md` file and `cat` it, not an inline heredoc |
 | Reviewer job runs but the API returns **401/403 "unregistered callers"** and the step's env shows the key **blank** (not `***`) | `${{ secrets.X }}` resolved to empty — most often an **org-level secret on a GitHub Free-plan org, which is not available to private repositories** | Set the secret at the **repo** level: `gh secret set X --repo <owner>/<repo> --body "…"` (or upgrade the org to Team/Enterprise) |
 | Secret "set" but still empty at runtime; its timestamp updates each attempt | `gh secret set` **without `--body`** reads the value from **stdin** (interactive paste). In a non-interactive shell it stores an **empty** value with no error | Pass `--body "<value>"`, pipe the value, or use the repo Settings UI (interactive in a real terminal is fine) |
-| Claude step fails: **"Claude Code is not installed on this repository"** | The Claude GitHub App isn't installed on the repo | Install <https://github.com/apps/claude> on the repo — after that, `claude_oauth_token` is optional |
-| Claude green but Gemini fails on the key | Claude authenticates via the **GitHub App** (token optional); **Gemini has no App fallback** | Ensure `gemini_api_key` is a **repo** secret (see the Free-plan note above) |
+| Claude step fails: **"Claude Code is not installed on this repository"** | The Claude GitHub App isn't installed on the repo | Install <https://github.com/apps/claude> on the repo (you still also need `claude_oauth_token`) |
+| Claude fails: **"Either ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or WIF is required"** | App auth alone is insufficient — the review's model call goes through the direct Anthropic API | Set a real `claude_oauth_token` repo secret (`claude setup-token`); the App is also required but not sufficient on its own |
 
 ## Layout
 

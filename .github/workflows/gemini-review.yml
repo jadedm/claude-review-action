@@ -55,10 +55,17 @@ permissions:
 
 jobs:
   gemini:
+    # Trigger paths:
+    #   - pull_request: every push / open / reopen / ready_for_review
+    #   - issue_comment containing @gemini: top-level PR comments
+    #   - pull_request_review_comment containing @gemini: inline review-thread
+    #     replies (parity with the Claude reusable, which already handles this)
     if: >
       github.event_name == 'pull_request' ||
       (github.event_name == 'issue_comment' &&
        github.event.issue.pull_request &&
+       contains(github.event.comment.body, '@gemini')) ||
+      (github.event_name == 'pull_request_review_comment' &&
        contains(github.event.comment.body, '@gemini'))
     runs-on: ${{ fromJSON(inputs.runner) }}
     concurrency:
@@ -98,14 +105,25 @@ jobs:
         id: diff
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
-          gh pr diff ${{ github.event.pull_request.number || github.event.issue.number }} > /tmp/pr-diff.txt
+          gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
           echo "lines=$(wc -l < /tmp/pr-diff.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Collect changed files
         id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
-          git diff --name-only origin/${{ github.event.pull_request.base.ref }}...HEAD \
+          # Resolve the file list via the GitHub API rather than
+          # `git diff origin/<base>...HEAD`. The git-diff approach breaks on
+          # `issue_comment` events because `github.event.pull_request.base.ref`
+          # is empty there — the command expands to `git diff origin/...HEAD`,
+          # silently emits nothing, and the whole review is skipped without
+          # an error. `gh pr view --json files` works for both `pull_request`
+          # and `issue_comment` event payloads.
+          gh pr view "$PR_NUMBER" --json files --jq '.files[].path' \
             | grep -v -E '\.(lock|min\.(js|css)|map|snap|png|jpg|jpeg|gif|svg|ico|woff|ttf|eot)$' \
             | grep -v -E '(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|dist/|node_modules/|coverage/)' \
             > /tmp/changed-files.txt || true
@@ -117,13 +135,20 @@ jobs:
           MAX_TOTAL_LINES: ${{ inputs.max_total_lines }}
           MAX_PER_FILE: ${{ inputs.max_per_file }}
           MAX_FILES: ${{ inputs.max_files }}
+          # IMPORTANT: pass user-controlled inputs via env, NEVER interpolate
+          # ${{ inputs.* }} directly into bash. Direct interpolation lets
+          # backticks / $(...) inside a consumer's extra_prompt run as shell
+          # commands in the runner where gemini_api_key is exported.
+          STACK: ${{ inputs.stack }}
+          EXTRA_PROMPT: ${{ inputs.extra_prompt }}
+          EXTRA_PROMPT_PATH: ${{ inputs.extra_prompt_path }}
         run: |
           set -euo pipefail
           ROOT=".claude-review-action"
           BASE="$ROOT/prompts/base.md"
-          STACK="$ROOT/prompts/${{ inputs.stack }}.md"
+          STACK_FILE="$ROOT/prompts/${STACK}.md"
 
-          if [ ! -f "$BASE" ] || [ ! -f "$STACK" ]; then
+          if [ ! -f "$BASE" ] || [ ! -f "$STACK_FILE" ]; then
             echo "::error::base or stack prompt not found"
             exit 1
           fi
@@ -152,30 +177,35 @@ jobs:
           {
             cat "$BASE"
             echo ""
-            cat "$STACK"
+            cat "$STACK_FILE"
             # Optional repo-specific addendum from a file inside the
             # consumer repo + the optional inline string. Either or both
             # are appended under a single "Repo-specific notes" heading;
             # file contents render first, inline string second.
-            EXTRA_PATH="${{ inputs.extra_prompt_path }}"
             EXTRAS_RENDERED=0
-            if [ -n "$EXTRA_PATH" ] && [ -f "$EXTRA_PATH" ]; then
+            if [ -n "$EXTRA_PROMPT_PATH" ] && [ -f "$EXTRA_PROMPT_PATH" ]; then
               echo ""
               echo "## Repo-specific notes"
               echo ""
-              cat "$EXTRA_PATH"
+              cat "$EXTRA_PROMPT_PATH"
               EXTRAS_RENDERED=1
-            elif [ -n "$EXTRA_PATH" ]; then
-              echo "::warning::extra_prompt_path '$EXTRA_PATH' not found in consumer repo — skipping" >&2
+            elif [ -n "$EXTRA_PROMPT_PATH" ]; then
+              echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' not found in consumer repo — skipping" >&2
             fi
-            if [ -n "${{ inputs.extra_prompt }}" ]; then
+            if [ -n "$EXTRA_PROMPT" ]; then
               if [ "$EXTRAS_RENDERED" -eq 0 ]; then
                 echo ""
                 echo "## Repo-specific notes"
                 echo ""
               fi
-              echo "${{ inputs.extra_prompt }}"
+              printf '%s\n' "$EXTRA_PROMPT"
             fi
+            # Output-format instructions live in prompts/_gemini-tail.md.
+            # Inlining them here as a bash heredoc broke YAML parsing because
+            # the heredoc body sat at column 1, outside the `run: |` literal
+            # scalar — Actions failed the workflow with "error parsing called
+            # workflow" the moment a consumer invoked the reusable.
+            echo ""
             cat "$ROOT/prompts/_gemini-tail.md"
           } > /tmp/review-prompt.txt
 
@@ -209,6 +239,7 @@ jobs:
           API_URL="https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent"
           RESULT_FILE=/tmp/gemini-result.json
 
+          HTTP_CODE=""
           for attempt in 1 2 3; do
             HTTP_CODE=$(curl -s -w "%{http_code}" -o "$RESULT_FILE" \
               "$API_URL" \
@@ -238,6 +269,16 @@ jobs:
               exit 1
             fi
           done
+
+          # Fail explicitly when all three attempts came back 429 / 503 —
+          # otherwise the loop ends with HTTP_CODE still non-200 and the
+          # python parser below crashes with a KeyError trying to read
+          # data['candidates'] from a Gemini error envelope.
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Gemini API failed after 3 attempts (last HTTP ${HTTP_CODE}):"
+            cat "$RESULT_FILE"
+            exit 1
+          fi
 
           python3 - <<PYEOF
           import json
