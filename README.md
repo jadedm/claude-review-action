@@ -228,7 +228,10 @@ Without these, the effective `GITHUB_TOKEN` in the reusable workflow falls back 
 │       └── action.yml       # composite action used by both reviewers
 ├── prompts/
 │   ├── base.md              # universal review rules (always loaded)
-│   └── nestjs-fastify-drizzle.md
+│   ├── apps-script.md       # Google Apps Script
+│   ├── expo-router-nativewind.md    # Expo SDK 57+ / Expo Router / React Native / NativeWind
+│   ├── nestjs-fastify-drizzle.md
+│   └── nextjs-turborepo-shadcn.md   # Next.js (App Router) + Turborepo + shadcn/ui + Tailwind v4
 ├── LICENSE
 └── README.md
 ```
