@@ -231,7 +231,8 @@ Without these, the effective `GITHUB_TOKEN` in the reusable workflow falls back 
 │   ├── apps-script.md       # Google Apps Script
 │   ├── expo-router-nativewind.md    # Expo SDK 57+ / Expo Router / React Native / NativeWind
 │   ├── nestjs-fastify-drizzle.md
-│   └── nextjs-turborepo-shadcn.md   # Next.js (App Router) + Turborepo + shadcn/ui + Tailwind v4
+│   ├── nextjs-turborepo-shadcn.md   # Next.js (App Router) + Turborepo + shadcn/ui + Tailwind v4
+│   └── python.md            # Python: pytest, pandas/numpy, requests, uv/pip
 ├── LICENSE
 └── README.md
 ```
