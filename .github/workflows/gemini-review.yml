@@ -106,8 +106,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          REPO: ${{ github.repository }}
         run: |
-          gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt
+          set -euo pipefail
+          # GitHub refuses the whole-PR diff past 300 files or 20,000 lines
+          # (HTTP 406 "diff exceeded the maximum number of files"), which
+          # failed the review outright on large PRs. Fall back to the
+          # per-file patches of the paginated files API, which has no such
+          # cap. Only the first 500 lines are sent to the model either way.
+          if ! gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt 2> /tmp/pr-diff.err; then
+            if grep -qiE '406|too_large|exceeded the maximum' /tmp/pr-diff.err; then
+              echo "::notice::PR diff too large for the diff API; using per-file patches"
+              gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+                --jq '.[] | "diff --git a/\(.filename) b/\(.filename)\n\(.patch // "(patch omitted by GitHub: file too large)")"' \
+                > /tmp/pr-diff.txt
+            else
+              cat /tmp/pr-diff.err >&2
+              exit 1
+            fi
+          fi
           echo "lines=$(wc -l < /tmp/pr-diff.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Collect changed files
@@ -115,15 +132,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          REPO: ${{ github.repository }}
         run: |
           # Resolve the file list via the GitHub API rather than
           # `git diff origin/<base>...HEAD`. The git-diff approach breaks on
           # `issue_comment` events because `github.event.pull_request.base.ref`
           # is empty there — the command expands to `git diff origin/...HEAD`,
           # silently emits nothing, and the whole review is skipped without
-          # an error. `gh pr view --json files` works for both `pull_request`
-          # and `issue_comment` event payloads.
-          gh pr view "$PR_NUMBER" --json files --jq '.files[].path' \
+          # an error. The REST files API works for both `pull_request` and
+          # `issue_comment` payloads, and --paginate reads every page:
+          # `gh pr view --json files` stopped at the first 100 files, so a
+          # large PR silently lost the rest.
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' \
             | grep -v -E '\.(lock|min\.(js|css)|map|snap|png|jpg|jpeg|gif|svg|ico|woff|ttf|eot)$' \
             | grep -v -E '(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|dist/|node_modules/|coverage/)' \
             > /tmp/changed-files.txt || true
