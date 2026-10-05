@@ -21,7 +21,9 @@ COMMENT_LIMIT = 60000  # GitHub refuses comments over 65,536 characters
 ZWSP = "\u200b"  # zero-width space: breaks a pattern without changing what is shown
 
 # Characters that start Markdown or HTML constructs outside a code span.
-_MARKDOWN = re.compile(r"([\\`*_\[\]()!#|~])")
+_MARKDOWN = re.compile(r"([\\`*_\[\]()!#|~$])")  # $ starts GitHub math
+# Bidirectional controls reorder how text is shown without changing it.
+_BIDI = re.compile("[‪-‮⁦-⁩‎‏]")
 _HTML_CHARS = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
 _CODE_SPAN = re.compile(r"`([^`]+)`")
 _FOOTER = ["---", "*Reviewed by Gemini*"]
@@ -39,7 +41,7 @@ def _plain(text):
 
 def _encodable(text):
     """Replace lone surrogates, which JSON allows and UTF-8 output refuses."""
-    return text.encode("utf-8", "replace").decode("utf-8")
+    return _BIDI.sub("", text.encode("utf-8", "replace").decode("utf-8"))
 
 
 def _no_block_start(text):

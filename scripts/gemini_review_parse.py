@@ -98,12 +98,15 @@ def reply_text(envelope):
 
 
 def main(src, dst):
-    with open(src) as f:
-        envelope = json.load(f)
     try:
+        with open(src) as f:
+            envelope = json.load(f)
         text = reply_text(envelope)
     except ValueError as e:
         print(f"ERROR: {e}")
+        return 1
+    except (TypeError, AttributeError, KeyError, IndexError):
+        print("ERROR: Gemini's API response was not in the expected format")
         return 1
     review = parse_review(text)
     if review is None:

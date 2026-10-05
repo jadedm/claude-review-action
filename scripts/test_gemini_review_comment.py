@@ -55,7 +55,9 @@ for label, raw, want in [
 ]:
     out = inert(raw)
     check(label, out.startswith(want), repr(out))
-check("  a lone surrogate is replaced, not a crash", inert("a\ud800b").encode("utf-8") is not None)
+check("  a lone surrogate is replaced, not a crash", inert("a\ud800b") == "a?b", repr(inert("a\ud800b")))
+check("  math cannot render", "$x^2$" not in inert("area $x^2$ here"), repr(inert("area $x^2$ here")))
+check("  bidirectional controls are removed", inert("abc\u202edef\u2066g") == "abcdefg", repr(inert("abc\u202edef\u2066g")))
 
 print("length bounds")
 long_text = "a" * 10000
@@ -88,7 +90,8 @@ check("  an empty findings list says no issues", "No issues found." in build_com
 check("  a missing findings list does not claim no issues",
       "No issues found." not in build_comment({"summary": "s"}) and "did not include a findings list" in build_comment({"summary": "s"}))
 check("  a lone surrogate in a field still builds a printable comment",
-      build_comment({"summary": "\ud800", "issues": [{"file": "\udc00", "description": "x"}]}).encode("utf-8") is not None)
+      "\ud800" not in build_comment({"summary": "\ud800", "issues": [{"file": "\udc00", "description": "x"}]})
+      and "\udc00" not in build_comment({"summary": "\ud800", "issues": [{"file": "\udc00", "description": "x"}]}))
 check("11 the unreadable notice is fixed text", build_comment({"unparsed": True}) == UNPARSED)
 check("  every hostile field in a full review is inert",
       not re.search(r"@[a-z]|https?://|<[a-z]|\]\(", outside_code(build_comment({

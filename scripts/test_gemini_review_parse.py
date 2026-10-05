@@ -114,6 +114,9 @@ code, out = run(envelope(truncated))
 check("7 a truncated reply: exit 2, no raw text in the output file", (code, out), (2, {"unparsed": True}))
 code, out = run({"error": {"message": "quota exceeded", "code": 429}})
 check("8 an API error: exit 1, nothing written", (code, out), (1, None))
+for label, bad in [("null", None), ("a list", []), ("error as text", {"error": "oops"}), ("a null candidate", {"candidates": [None]})]:
+    code, out = run(bad)
+    check(f"  a malformed API response ({label}): exit 1, no crash", (code, out), (1, None))
 code, out = run({"candidates": [{"finishReason": "SAFETY"}]})
 check("  no reply text: exit 1, nothing written", (code, out), (1, None))
 
