@@ -60,13 +60,19 @@ jobs:
     #   - issue_comment containing @gemini: top-level PR comments
     #   - pull_request_review_comment containing @gemini: inline review-thread
     #     replies (parity with the Claude reusable, which already handles this)
+    # On a public repo anyone can comment, and each comment spends the
+    # caller's API quota; only people with a role in the repo may trigger it.
+    # Private repos skip the check: only people with access can comment, and
+    # author_association can misreport private org membership.
     if: >
       github.event_name == 'pull_request' ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       contains(github.event.comment.body, '@gemini')) ||
-      (github.event_name == 'pull_request_review_comment' &&
-       contains(github.event.comment.body, '@gemini'))
+      ((github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '@gemini')) ||
+       (github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, '@gemini'))) &&
+      (github.event.repository.private ||
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ${{ fromJSON(inputs.runner) }}
     concurrency:
       group: gemini-review-${{ github.event.pull_request.number || github.event.issue.number }}
@@ -300,17 +306,14 @@ jobs:
             exit 1
           fi
 
-          python3 - <<PYEOF
-          import json
-          with open("$RESULT_FILE") as f:
-              data = json.load(f)
-          if "error" in data:
-              print(f"ERROR: {data['error']['message']}")
-              exit(1)
-          text = data["candidates"][0]["content"]["parts"][0]["text"]
-          with open("/tmp/gemini-review.json", "w") as f:
-              f.write(text)
-          PYEOF
+          # Extract and validate the review (#8). Gemini quotes code with
+          # backslashes such as \d inside its JSON reply; the parser repairs
+          # those escapes. Exit 2 means the reply was unreadable: the next step
+          # posts a fixed notice and fails the job, so the raw model text never
+          # reaches the pull request.
+          rc=0
+          python3 .claude-review-action/scripts/gemini_review_parse.py "$RESULT_FILE" /tmp/gemini-review.json || rc=$?
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then exit "$rc"; fi
 
       - name: Post review comment
         if: steps.files.outputs.count > 0
@@ -319,59 +322,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          COMMENT=$(python3 << 'PYEOF'
-          import json
-
-          with open("/tmp/gemini-review.json") as f:
-              review = json.load(f)
-
-          severity_icons = {
-              "critical": "🔴",
-              "high": "🟡",
-              "medium": "🟠",
-              "low": "🟢",
-          }
-
-          lines = ["### Gemini Code Review", ""]
-          lines.append(f"**Summary:** {review.get('summary','(no summary)')}")
-          lines.append("")
-
-          issues = review.get("issues") or []
-          if issues:
-              lines += ["### Findings", ""]
-              for issue in issues:
-                  icon = severity_icons.get(issue.get("severity", "low"), "⚪")
-                  lines.append(f"{icon} **{issue.get('severity','low').upper()}** — `{issue.get('file','?')}:{issue.get('line','?')}` ({issue.get('category','general')})")
-                  lines.append(f"> {issue.get('description','')}")
-                  if issue.get("suggestion"):
-                      lines.append(f"> **Suggestion:** {issue['suggestion']}")
-                  lines.append("")
-          else:
-              lines += ["No issues found.", ""]
-
-          if review.get("positives"):
-              lines += ["### What's Well Done"]
-              for p in review["positives"]:
-                  lines.append(f"- {p}")
-              lines.append("")
-
-          assessment_icons = {
-              "approve": "✅",
-              "comment": "💬",
-              "request_changes": "🔄",
-          }
-          assessment = review.get("overall_assessment", "comment")
-          icon = assessment_icons.get(assessment, "💬")
-          lines.append(f"**Overall: {icon} {assessment.replace('_',' ').title()}**")
-          lines.append("")
-          lines.append("---")
-          lines.append("*Reviewed by Gemini*")
-          print("\n".join(lines))
-          PYEOF
-          )
+          # Every field Gemini returns is untrusted: it read the pull request.
+          # The builder renders it inert (no mentions, links, images or HTML)
+          # and keeps the comment under GitHub's size limit.
+          COMMENT=$(python3 .claude-review-action/scripts/gemini_review_comment.py /tmp/gemini-review.json)
           gh pr comment ${{ github.event.pull_request.number || github.event.issue.number }} --body "$COMMENT"
 
-          echo "assessment=$(python3 -c "import json; print(json.load(open('/tmp/gemini-review.json')).get('overall_assessment','comment'))")" >> "$GITHUB_OUTPUT"
+          if python3 -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('unparsed') else 1)"; then
+            echo "assessment=unparsed" >> "$GITHUB_OUTPUT"
+            echo "issue_count=?" >> "$GITHUB_OUTPUT"
+            echo "::error::Gemini's reply could not be read as a review; see the Call Gemini API step log"
+            exit 1
+          fi
+
+          # Only a known verdict reaches the outputs: the model's own text could
+          # carry a newline and write extra output lines.
+          echo "assessment=$(python3 -c "import json; a=json.load(open('/tmp/gemini-review.json')).get('overall_assessment'); print(a if a in ('approve','comment','request_changes') else 'other')")" >> "$GITHUB_OUTPUT"
           echo "issue_count=$(python3 -c "import json; print(len(json.load(open('/tmp/gemini-review.json')).get('issues', [])))")" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack

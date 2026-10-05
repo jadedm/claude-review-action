@@ -1,0 +1,20 @@
+name: Tests
+
+# Runs this repository's own tests. Not part of the reusable review workflows.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  parser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Gemini reply parser (#8)
+        run: python3 scripts/test_gemini_review_parse.py
+      - name: Gemini comment builder (#8)
+        run: python3 scripts/test_gemini_review_comment.py

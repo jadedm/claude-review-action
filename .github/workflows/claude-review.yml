@@ -35,13 +35,19 @@ on:
 
 jobs:
   claude:
+    # On a public repo anyone can comment, and each comment spends the
+    # caller's API quota; only people with a role in the repo may trigger it.
+    # Private repos skip the check: only people with access can comment, and
+    # author_association can misreport private org membership.
     if: >
       github.event_name == 'pull_request' ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' &&
-       contains(github.event.comment.body, '@claude'))
+      ((github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '@claude')) ||
+       (github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, '@claude'))) &&
+      (github.event.repository.private ||
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ${{ fromJSON(inputs.runner) }}
     concurrency:
       group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
