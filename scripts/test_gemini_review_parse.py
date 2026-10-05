@@ -62,9 +62,18 @@ print("shape and ambiguity")
 check("  a lone backslash before the closing quote stays unreadable",
       parse_review('{"summary": "path C:\\", "issues": []}'), None)
 check("  issues holding strings is the wrong shape", parse_review('{"summary": "s", "issues": ["text"]}'), None)
-check("  an unknown assessment is the wrong shape", parse_review('{"summary": "s", "overall_assessment": "ship it"}'), None)
-check("  an unknown severity is the wrong shape",
-      parse_review('{"summary": "s", "issues": [{"severity": "urgent", "description": "d"}]}'), None)
+check("  an assessment that is not text is the wrong shape", parse_review('{"summary": "s", "overall_assessment": 3}'), None)
+check("  a severity that is not text is the wrong shape",
+      parse_review('{"summary": "s", "issues": [{"severity": ["high"], "description": "d"}]}'), None)
+# Seen live on the first canary run: Gemini used "minor", outside the prompt's
+# list. The comment builder has always shown such values with a neutral icon,
+# so they must not make the review unreadable.
+check("  severity 'minor' (outside the prompt's list) still parses",
+      parse_review('{"summary": "s", "issues": [{"severity": "minor", "description": "d"}]}'),
+      {"summary": "s", "issues": [{"severity": "minor", "description": "d"}]})
+check("  an unfamiliar assessment still parses",
+      parse_review('{"summary": "s", "overall_assessment": "ship it"}'),
+      {"summary": "s", "overall_assessment": "ship it"})
 check("  positives holding objects is the wrong shape", parse_review('{"summary": "s", "positives": [{"a": 1}]}'), None)
 check("  a minimal valid review passes", parse_review('{"summary": "s"}'), {"summary": "s"})
 

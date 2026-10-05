@@ -38,15 +38,15 @@ def strip_fence(text):
     return m.group(1) if m else t
 
 
-SEVERITIES = {"critical", "high", "medium", "low"}
-ASSESSMENTS = {"approve", "comment", "request_changes"}
-
-
 def well_formed(review):
-    """Whether `review` has the shape the comment builder reads."""
+    """Whether `review` has the shape the comment builder reads.
+
+    Types only, not values. Gemini sometimes answers with a severity outside the
+    prompt's list ("minor"), and the comment builder has always shown those with
+    a neutral icon; rejecting them would suppress reviews that used to post."""
     if not isinstance(review, dict) or not isinstance(review.get("summary", ""), str):
         return False
-    if review.get("overall_assessment", "comment") not in ASSESSMENTS:
+    if not isinstance(review.get("overall_assessment", "comment"), str):
         return False
     issues = review.get("issues", [])
     positives = review.get("positives", [])
@@ -55,7 +55,7 @@ def well_formed(review):
     if not all(isinstance(p, str) for p in positives):
         return False
     for issue in issues:
-        if not isinstance(issue, dict) or issue.get("severity", "low") not in SEVERITIES:
+        if not isinstance(issue, dict) or not isinstance(issue.get("severity", "low"), str):
             return False
         if not all(isinstance(issue.get(k, ""), (str, int)) for k in ("file", "line", "category", "description", "suggestion")):
             return False
