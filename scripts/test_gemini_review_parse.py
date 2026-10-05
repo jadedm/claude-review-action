@@ -74,6 +74,13 @@ check("  severity 'minor' (outside the prompt's list) still parses",
 check("  an unfamiliar assessment still parses",
       parse_review('{"summary": "s", "overall_assessment": "ship it"}'),
       {"summary": "s", "overall_assessment": "ship it"})
+check("  true where text belongs is the wrong shape",
+      parse_review('{"summary": "s", "issues": [{"severity": "low", "description": true}]}'), None)
+check("  a line number still passes", parse_review('{"summary": "s", "issues": [{"line": 12}]}'),
+      {"summary": "s", "issues": [{"line": 12}]})
+check("  deep nesting is unreadable, not a crash",
+      parse_review('{"summary": "s", "x": ' + "[" * 5000 + "]" * 5000 + "}"), None)
+check("  reply text that is not a string is unreadable", parse_review(["not", "text"]), None)
 check("  positives holding objects is the wrong shape", parse_review('{"summary": "s", "positives": [{"a": 1}]}'), None)
 check("  a minimal valid review passes", parse_review('{"summary": "s"}'), {"summary": "s"})
 

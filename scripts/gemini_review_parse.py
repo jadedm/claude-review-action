@@ -38,6 +38,12 @@ def strip_fence(text):
     return m.group(1) if m else t
 
 
+def text_or_number(value):
+    """A string or an integer. JSON true/false load as bool, a subclass of int,
+    and would be posted as "True" or "False", so they are refused."""
+    return isinstance(value, (str, int)) and not isinstance(value, bool)
+
+
 def well_formed(review):
     """Whether `review` has the shape the comment builder reads.
 
@@ -57,7 +63,7 @@ def well_formed(review):
     for issue in issues:
         if not isinstance(issue, dict) or not isinstance(issue.get("severity", "low"), str):
             return False
-        if not all(isinstance(issue.get(k, ""), (str, int)) for k in ("file", "line", "category", "description", "suggestion")):
+        if not all(text_or_number(issue.get(k, "")) for k in ("file", "line", "category", "description", "suggestion")):
             return False
     return True
 
@@ -68,11 +74,13 @@ def parse_review(text):
     The repair is tried only after a plain parse fails. A lone backslash just
     before a closing quote reads as an escaped quote either way, so that reply
     stays unreadable rather than being guessed at."""
+    if not isinstance(text, str):
+        return None
     body = strip_fence(text)
     for candidate in (body, repair_escapes(body)):
         try:
             value = json.loads(candidate)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             continue
         return value if well_formed(value) else None
     return None
