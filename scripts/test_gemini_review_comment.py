@@ -57,7 +57,8 @@ for label, raw, want in [
     check(label, out.startswith(want), repr(out))
 check("  a lone surrogate is replaced, not a crash", inert("a\ud800b") == "a?b", repr(inert("a\ud800b")))
 check("  math cannot render", "$x^2$" not in inert("area $x^2$ here"), repr(inert("area $x^2$ here")))
-check("  bidirectional controls are removed", inert("abc\u202edef\u2066g") == "abcdefg", repr(inert("abc\u202edef\u2066g")))
+bidi = "a\u202eb\u2066c\u061cd\u200fe"
+check("  bidirectional controls are removed", inert(bidi) == "abcde", repr(inert(bidi)))
 
 print("length bounds")
 long_text = "a" * 10000

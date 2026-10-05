@@ -91,10 +91,13 @@ def reply_text(envelope):
     if "error" in envelope:
         raise ValueError(f"Gemini API error: {envelope['error'].get('message', envelope['error'])}")
     try:
-        return envelope["candidates"][0]["content"]["parts"][0]["text"]
+        text = envelope["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError, TypeError):
         reason = (envelope.get("candidates") or [{}])[0].get("finishReason", "no candidates")
         raise ValueError(f"Gemini returned no review text ({reason})")
+    if not isinstance(text, str):
+        raise ValueError("Gemini returned no review text (the reply was not text)")
+    return text
 
 
 def main(src, dst):
@@ -105,7 +108,7 @@ def main(src, dst):
     except ValueError as e:
         print(f"ERROR: {e}")
         return 1
-    except (TypeError, AttributeError, KeyError, IndexError):
+    except (TypeError, AttributeError, KeyError, IndexError, RecursionError):
         print("ERROR: Gemini's API response was not in the expected format")
         return 1
     review = parse_review(text)

@@ -23,7 +23,7 @@ ZWSP = "\u200b"  # zero-width space: breaks a pattern without changing what is s
 # Characters that start Markdown or HTML constructs outside a code span.
 _MARKDOWN = re.compile(r"([\\`*_\[\]()!#|~$])")  # $ starts GitHub math
 # Bidirectional controls reorder how text is shown without changing it.
-_BIDI = re.compile("[‪-‮⁦-⁩‎‏]")
+_BIDI = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 _HTML_CHARS = {"&": "&amp;", "<": "&lt;", ">": "&gt;"}
 _CODE_SPAN = re.compile(r"`([^`]+)`")
 _FOOTER = ["---", "*Reviewed by Gemini*"]

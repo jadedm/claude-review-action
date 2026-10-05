@@ -114,9 +114,15 @@ code, out = run(envelope(truncated))
 check("7 a truncated reply: exit 2, no raw text in the output file", (code, out), (2, {"unparsed": True}))
 code, out = run({"error": {"message": "quota exceeded", "code": 429}})
 check("8 an API error: exit 1, nothing written", (code, out), (1, None))
-for label, bad in [("null", None), ("a list", []), ("error as text", {"error": "oops"}), ("a null candidate", {"candidates": [None]})]:
+for label, bad in [("null", None), ("a list", []), ("error as text", {"error": "oops"}), ("a null candidate", {"candidates": [None]}),
+                   ("text that is not text", {"candidates": [{"content": {"parts": [{"text": ["x"]}]}}]})]:
     code, out = run(bad)
     check(f"  a malformed API response ({label}): exit 1, no crash", (code, out), (1, None))
+d = tempfile.mkdtemp()
+with open(os.path.join(d, "in.json"), "w") as f:
+    f.write("[" * 100000 + "]" * 100000)  # too deep for json.load
+code = main(os.path.join(d, "in.json"), os.path.join(d, "out.json"))
+check("  a too-deeply nested API response: exit 1, no crash", (code, os.path.exists(os.path.join(d, "out.json"))), (1, False))
 code, out = run({"candidates": [{"finishReason": "SAFETY"}]})
 check("  no reply text: exit 1, nothing written", (code, out), (1, None))
 
