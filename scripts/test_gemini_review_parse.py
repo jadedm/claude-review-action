@@ -78,8 +78,10 @@ check("  true where text belongs is the wrong shape",
       parse_review('{"summary": "s", "issues": [{"severity": "low", "description": true}]}'), None)
 check("  a line number still passes", parse_review('{"summary": "s", "issues": [{"line": 12}]}'),
       {"summary": "s", "issues": [{"line": 12}]})
-check("  deep nesting is unreadable, not a crash",
-      parse_review('{"summary": "s", "x": ' + "[" * 5000 + "]" * 5000 + "}"), None)
+# Python 3.9 and 3.12 raise RecursionError on this; 3.14 parses it. Either
+# outcome is fine as long as nothing escapes, so only the type is compared.
+check("  deep nesting does not crash",
+      type(parse_review('{"summary": "s", "x": ' + "[" * 100000 + "]" * 100000 + "}")).__name__ in ("dict", "NoneType"), True)
 check("  reply text that is not a string is unreadable", parse_review(["not", "text"]), None)
 check("  positives holding objects is the wrong shape", parse_review('{"summary": "s", "positives": [{"a": 1}]}'), None)
 check("  an empty object is not a review", parse_review("{}"), None)
