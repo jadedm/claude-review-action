@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Turns a Gemini generateContent response into the review JSON (#8).
+
+Gemini is asked for a JSON review, and when it quotes code from the diff it
+copies backslashes as they appear: `\\d`, `\\w`, `\\s`, `C:\\Users`. Those are not
+valid JSON escapes, so a plain json.loads raised and the job failed after the
+review had already been written. This repairs exactly those escapes and keeps
+every valid one. A reply that still cannot be read, or that is JSON of the wrong
+shape, is reported as unreadable: the raw text goes to the job log only, never to
+the pull request, because the model read untrusted PR text and its output could
+carry mentions, links or Markdown that would be posted under the bot's name.
+
+    python3 gemini_review_parse.py <api-response.json> <review-out.json>
+
+Exit 0 with a validated review written. Exit 2 with {"unparsed": true} written
+when the reply is unreadable (the caller posts a fixed notice and fails the job).
+Exit 1 when the API returned an error or no reply at all. Standard library only.
+"""
+import json
+import re
+import sys
+
+# A valid JSON escape is \" \\ \/ \b \f \n \r \t or \u plus four hex digits.
+# Matched first, so an escaped backslash ("\\\\") is consumed as one unit and
+# the letter after it is never mistaken for the start of an escape.
+_ESCAPE = re.compile(r'\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})|\\')
+
+
+def repair_escapes(text):
+    """Double every backslash that does not begin a valid JSON escape."""
+    return _ESCAPE.sub(lambda m: m.group(0) if len(m.group(0)) > 1 else "\\\\", text)
+
+
+def strip_fence(text):
+    """Remove a surrounding Markdown code fence, if the model added one."""
+    t = text.strip()
+    m = re.match(r"^```(?:json)?\s*\n(.*)\n```\s*$", t, re.S)
+    return m.group(1) if m else t
+
+
+SEVERITIES = {"critical", "high", "medium", "low"}
+ASSESSMENTS = {"approve", "comment", "request_changes"}
+
+
+def well_formed(review):
+    """Whether `review` has the shape the comment builder reads."""
+    if not isinstance(review, dict) or not isinstance(review.get("summary", ""), str):
+        return False
+    if review.get("overall_assessment", "comment") not in ASSESSMENTS:
+        return False
+    issues = review.get("issues", [])
+    positives = review.get("positives", [])
+    if not isinstance(issues, list) or not isinstance(positives, list):
+        return False
+    if not all(isinstance(p, str) for p in positives):
+        return False
+    for issue in issues:
+        if not isinstance(issue, dict) or issue.get("severity", "low") not in SEVERITIES:
+            return False
+        if not all(isinstance(issue.get(k, ""), (str, int)) for k in ("file", "line", "category", "description", "suggestion")):
+            return False
+    return True
+
+
+def parse_review(text):
+    """The review as a dict, or None if it is not readable JSON of the right shape.
+
+    The repair is tried only after a plain parse fails. A lone backslash just
+    before a closing quote reads as an escaped quote either way, so that reply
+    stays unreadable rather than being guessed at."""
+    body = strip_fence(text)
+    for candidate in (body, repair_escapes(body)):
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        return value if well_formed(value) else None
+    return None
+
+
+def reply_text(envelope):
+    """The model's text from an API response, or raise ValueError."""
+    if "error" in envelope:
+        raise ValueError(f"Gemini API error: {envelope['error'].get('message', envelope['error'])}")
+    try:
+        return envelope["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        reason = (envelope.get("candidates") or [{}])[0].get("finishReason", "no candidates")
+        raise ValueError(f"Gemini returned no review text ({reason})")
+
+
+def main(src, dst):
+    with open(src) as f:
+        envelope = json.load(f)
+    try:
+        text = reply_text(envelope)
+    except ValueError as e:
+        print(f"ERROR: {e}")
+        return 1
+    review = parse_review(text)
+    if review is None:
+        print("WARNING: Gemini's reply is not a readable review. Raw reply, for the log only:")
+        print(text)
+        with open(dst, "w") as f:
+            json.dump({"unparsed": True}, f)
+        return 2
+    with open(dst, "w") as f:
+        json.dump(review, f)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1], sys.argv[2]))
