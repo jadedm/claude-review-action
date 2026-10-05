@@ -16,3 +16,5 @@ jobs:
       - uses: actions/checkout@v6
       - name: Gemini reply parser (#8)
         run: python3 scripts/test_gemini_review_parse.py
+      - name: Gemini comment builder (#8)
+        run: python3 scripts/test_gemini_review_comment.py
