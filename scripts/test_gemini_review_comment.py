@@ -44,9 +44,18 @@ check("6 newlines cannot start a heading or leave the quote", "\n" not in out, r
 print("code spans are kept")
 out = inert("use `re.match(r'^\\d+$', s)` instead of `@decorator`")
 check("7 code span content is unchanged", "`re.match(r'^\\d+$', s)`" in out and "`@decorator`" in out, repr(out))
-check("  a mention inside a code span stays literal", "@decorator" in out)
+check("  a mention inside a code span stays literal", "`@decorator`" in out and "@\u200bdecorator" not in out, repr(out))
 out = inert("odd ` backtick then @user")
-check("  an unmatched backtick does not open code", "@" + "​" + "user" in out, repr(out))
+check("  an unmatched backtick does not open code", "\\`" in out and "@\u200buser" in out, repr(out))
+
+for label, raw, want in [
+    ("  a leading - cannot start a list or divider", "--- or - item", "\\---"),
+    ("  a leading + cannot start a list", "+ item", "\\+ item"),
+    ("  a leading number cannot start a list", "1. item", "1\\. item"),
+]:
+    out = inert(raw)
+    check(label, out.startswith(want), repr(out))
+check("  a lone surrogate is replaced, not a crash", inert("a\ud800b").encode("utf-8") is not None)
 
 print("length bounds")
 long_text = "a" * 10000
@@ -57,6 +66,12 @@ comment = build_comment(many)
 check("9 a long review stays under the comment limit", len(comment) <= COMMENT_LIMIT, len(comment))
 check("  and says it was cut", "were cut to fit" in comment)
 check("  and keeps its footer", comment.endswith("*Reviewed by Gemini*"))
+# Sizes chosen so the blocks fill to just under the limit, where the cut
+# notice used to be added after the fit check and push the comment over it.
+worst = max((len(build_comment({"summary": "s", "issues": [
+    {"severity": "low", "file": "f", "line": 1, "category": "c", "description": "d" * n}] * 200}))
+    for n in range(1500, 2000, 7)))
+check("  the cut notice never pushes a comment over the limit", worst <= COMMENT_LIMIT, worst)
 
 print("the review itself")
 review = {"summary": "Adds `x`", "issues": [
@@ -69,13 +84,17 @@ check("10 findings, icons and verdict render", all(s in comment for s in [
     "**Summary:** Adds `x`", "🟡 **HIGH** — `a.ts:3` (security)", "> bad", "> **Suggestion:** fix",
     "⚪ **MINOR**", "- tests", "**Overall: 🔄 Request Changes**"]), comment)
 check("  a backtick in a file path cannot close the code span", "`b'.ts:1`" in comment, comment)
-check("  no findings says so", "No issues found." in build_comment({"summary": "s"}))
+check("  an empty findings list says no issues", "No issues found." in build_comment({"summary": "s", "issues": []}))
+check("  a missing findings list does not claim no issues",
+      "No issues found." not in build_comment({"summary": "s"}) and "did not include a findings list" in build_comment({"summary": "s"}))
+check("  a lone surrogate in a field still builds a printable comment",
+      build_comment({"summary": "\ud800", "issues": [{"file": "\udc00", "description": "x"}]}).encode("utf-8") is not None)
 check("11 the unreadable notice is fixed text", build_comment({"unparsed": True}) == UNPARSED)
 check("  every hostile field in a full review is inert",
       not re.search(r"@[a-z]|https?://|<[a-z]|\]\(", outside_code(build_comment({
           "summary": "@a https://x <b>", "issues": [{"severity": "@s", "file": "f", "line": 1,
           "category": "[c](https://x)", "description": "<img>", "suggestion": "@d"}],
-          "positives": ["www.x.com @p"], "overall_assessment": "<script>"})).replace("​", " ")),
+          "positives": ["www.x.com @p"], "overall_assessment": "<script>"})).replace("\u200b", " ")),
       "a field reached the comment raw")
 
 print(f"\n{passed} passed, {failed} failed")

@@ -337,7 +337,7 @@ jobs:
 
           # Only a known verdict reaches the outputs: the model's own text could
           # carry a newline and write extra output lines.
-          echo "assessment=$(python3 -c "import json; a=json.load(open('/tmp/gemini-review.json')).get('overall_assessment','comment'); print(a if a in ('approve','comment','request_changes') else 'other')")" >> "$GITHUB_OUTPUT"
+          echo "assessment=$(python3 -c "import json; a=json.load(open('/tmp/gemini-review.json')).get('overall_assessment'); print(a if a in ('approve','comment','request_changes') else 'other')")" >> "$GITHUB_OUTPUT"
           echo "issue_count=$(python3 -c "import json; print(len(json.load(open('/tmp/gemini-review.json')).get('issues', [])))")" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack

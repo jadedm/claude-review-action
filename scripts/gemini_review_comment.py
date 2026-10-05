@@ -18,7 +18,7 @@ import sys
 
 FIELD_LIMIT = 2000
 COMMENT_LIMIT = 60000  # GitHub refuses comments over 65,536 characters
-ZWSP = "​"  # zero-width space: breaks a pattern without changing what is shown
+ZWSP = "\u200b"  # zero-width space: breaks a pattern without changing what is shown
 
 # Characters that start Markdown or HTML constructs outside a code span.
 _MARKDOWN = re.compile(r"([\\`*_\[\]()!#|~])")
@@ -37,9 +37,21 @@ def _plain(text):
     return re.sub(r"(?i)\bwww\.", "www" + ZWSP + ".", text)
 
 
+def _encodable(text):
+    """Replace lone surrogates, which JSON allows and UTF-8 output refuses."""
+    return text.encode("utf-8", "replace").decode("utf-8")
+
+
+def _no_block_start(text):
+    """Stop a value that begins a line from starting a list or a divider."""
+    if text[:1] in ("-", "+", "="):
+        return "\\" + text
+    return re.sub(r"^(\d+)\.", r"\1\\.", text)
+
+
 def inert(value, limit=FIELD_LIMIT):
     """One line of untrusted text, safe to place in a comment."""
-    text = " ".join(str(value).split())  # newlines would leave the quote block
+    text = _encodable(" ".join(str(value).split()))  # newlines would leave the quote block
     if len(text) > limit:
         text = text[:limit] + " (truncated)"
     out, pos = [], 0
@@ -48,12 +60,12 @@ def inert(value, limit=FIELD_LIMIT):
         out.append("`" + m.group(1) + "`")
         pos = m.end()
     out.append(_plain(text[pos:]))
-    return "".join(out)
+    return _no_block_start("".join(out))
 
 
 def code(value):
     """A value shown inside a code span, such as a file path."""
-    text = " ".join(str(value).split()).replace("`", "'")
+    text = _encodable(" ".join(str(value).split())).replace("`", "'")
     return "`" + text[:300] + "`"
 
 
@@ -80,7 +92,9 @@ def build_comment(review):
 
     issues = review.get("issues") or []
     body = []
-    if issues:
+    if "issues" not in review:
+        body.append(["Gemini's reply did not include a findings list.", ""])
+    elif issues:
         body += ["### Findings", ""]
         for issue in issues:
             severity = str(issue.get("severity", "low"))
@@ -104,14 +118,16 @@ def build_comment(review):
     icon = ASSESSMENT_ICONS.get(assessment, "💬")
     tail = [f"**Overall: {icon} {inert(assessment.replace('_', ' ').title(), 40)}**", "", *_FOOTER]
 
-    # Add whole blocks while they fit, so a cut never lands inside one.
-    size = len("\n".join(lines + tail))
+    # Add whole blocks while they fit, so a cut never lands inside one. The
+    # cut notice is counted up front so adding it cannot pass the limit.
+    cut = ["*Further findings were cut to fit GitHub's comment limit.*", ""]
+    size = len("\n".join(lines + tail + cut))
     for block in body:
         if isinstance(block, str):
             block = [block]
         piece = "\n".join(block)
         if size + len(piece) + 1 > COMMENT_LIMIT:
-            lines += ["*Further findings were cut to fit GitHub's comment limit.*", ""]
+            lines += cut
             break
         lines += block
         size += len(piece) + 1

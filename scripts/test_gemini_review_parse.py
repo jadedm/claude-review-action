@@ -82,6 +82,11 @@ check("  deep nesting is unreadable, not a crash",
       parse_review('{"summary": "s", "x": ' + "[" * 5000 + "]" * 5000 + "}"), None)
 check("  reply text that is not a string is unreadable", parse_review(["not", "text"]), None)
 check("  positives holding objects is the wrong shape", parse_review('{"summary": "s", "positives": [{"a": 1}]}'), None)
+check("  an empty object is not a review", parse_review("{}"), None)
+check("  a review with no summary is not a review", parse_review('{"issues": []}'), None)
+# On Python 3.11+ an integer past the digit limit raises ValueError, not
+# JSONDecodeError; earlier versions parse it. Either way it must not crash.
+check("  a huge integer does not crash", type(parse_review('{"summary": "s", "n": ' + "1" * 5000 + "}")).__name__ in ("dict", "NoneType"), True)
 check("  a minimal valid review passes", parse_review('{"summary": "s"}'), {"summary": "s"})
 
 print("end to end through main()")

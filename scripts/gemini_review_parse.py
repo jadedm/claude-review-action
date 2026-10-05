@@ -50,8 +50,8 @@ def well_formed(review):
     Types only, not values. Gemini sometimes answers with a severity outside the
     prompt's list ("minor"), and the comment builder has always shown those with
     a neutral icon; rejecting them would suppress reviews that used to post."""
-    if not isinstance(review, dict) or not isinstance(review.get("summary", ""), str):
-        return False
+    if not isinstance(review, dict) or not isinstance(review.get("summary"), str):
+        return False  # a reply with no summary, such as {}, is not a review
     if not isinstance(review.get("overall_assessment", "comment"), str):
         return False
     issues = review.get("issues", [])
@@ -80,7 +80,7 @@ def parse_review(text):
     for candidate in (body, repair_escapes(body)):
         try:
             value = json.loads(candidate)
-        except (json.JSONDecodeError, RecursionError):
+        except (ValueError, RecursionError):  # ValueError covers JSONDecodeError and, on 3.11+, oversized integers
             continue
         return value if well_formed(value) else None
     return None
