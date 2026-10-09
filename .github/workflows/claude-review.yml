@@ -148,6 +148,34 @@ jobs:
           include_fix_links: true
           classify_inline_comments: true
           prompt: ${{ steps.prompt.outputs.PROMPT }}
+          # track_progress puts the action in tag mode, which grants file
+          # edits (acceptEdits) and git add/commit/rm plus a push wrapper, run
+          # with the Claude App token (contents: write, whatever this job's
+          # permissions say). A reviewer has no reason to write, and text in
+          # the pull request could ask it to. Deny rules win over the action's
+          # allow list; with nothing edited or committed, the push wrapper has
+          # nothing new to push.
+          claude_args: >-
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,Bash(git add:*),Bash(git commit:*),Bash(git rm:*)"
+
+      - name: Check the reviewer changed no files
+        # Proves the deny list above held. claude-code-action restores these
+        # paths from the base branch on pull requests and leaves them modified
+        # on purpose (SENSITIVE_PATHS in its restore-config.ts), and the prompts
+        # checkout lives inside the workspace, so all are excluded.
+        if: always()
+        run: |
+          set -euo pipefail
+          changes=$(git status --porcelain -- . \
+            ':(exclude).claude-review-action' \
+            ':(exclude).claude' ':(exclude).mcp.json' ':(exclude).claude.json' \
+            ':(exclude).gitmodules' ':(exclude).ripgreprc' ':(exclude).husky' \
+            ':(exclude)CLAUDE.md' ':(exclude)CLAUDE.local.md')
+          if [ -n "$changes" ]; then
+            echo "::error::The review step changed files in the checkout; a reviewer must not write"
+            printf '%s\n' "$changes"
+            exit 1
+          fi
 
       - name: Notify Slack
         if: always() && inputs.slack_notify && github.event_name == 'pull_request'
