@@ -170,7 +170,7 @@ jobs:
           # in the origin URL). The CLI applies Read rules to Grep and Glob too.
           use_commit_signing: true
           claude_args: >-
-            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*),Read(//proc/**),Read(~/.claude/**),Read(~/.config/**),Read(~/.ssh/**),Read(~/.docker/**),Read(~/.git-credentials),Read(~/.gitconfig),Read(//**/_temp/**),Read(**/.git/**)"
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*),Read(//proc/**),Read(~/.claude/**),Read(~/.config/**),Read(~/.ssh/**),Read(~/.docker/**),Read(~/.git-credentials),Read(~/.gitconfig),Read(~/.aws/**),Read(~/.kube/**),Read(~/.azure/**),Read(~/.gnupg/**),Read(~/.npmrc),Read(~/.netrc),Read(~/.pypirc),Read(//**/_temp/**),Read(**/.git/**)"
 
       - name: Check the reviewer changed no files
         # A tripwire, not a proof: it sees tracked and untracked changes in the

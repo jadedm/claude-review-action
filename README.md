@@ -88,6 +88,10 @@ jobs:
 
 That's the entire integration. Updates to the prompts in this central repo propagate to every consumer on the next PR.
 
+### The Claude reviewer and your `.claude/settings.json`
+
+The Claude reviewer cannot edit files, commit, push, or read the places on the runner that hold its credentials: process environments, the runner's temp folder, `.git` folders, and credential files in the home folder. These are deny rules, and deny rules win. They name specific commands and paths, though, and Claude also reads your repo's committed `.claude/settings.json`. Do not allow broad commands there, such as `Bash(git:*)`, `Bash(curl:*)` or `Bash(gh:*)`. A rule like that hands back a way to write or to send data out that the deny list does not name, for example `git -C . push`.
+
 ### Mentioning the bots
 
 Both reviewers re-trigger when their handle is mentioned in a PR comment:
