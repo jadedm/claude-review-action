@@ -156,10 +156,13 @@ jobs:
           # reason to write. use_commit_signing swaps the git commands and the
           # wrapper for two GitHub file tools, and also turns off the action's
           # own auto-commit at cleanup; the deny list then removes those tools
-          # and the file edit tools. Deny rules win over the action's allow list.
+          # and the file edit tools. Deny rules win over the action's allow list,
+          # and over a consumer's committed .claude/settings.json, which could
+          # otherwise allow git or gh with the token already in the remote URL
+          # and in GH_TOKEN.
           use_commit_signing: true
           claude_args: >-
-            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files"
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*)"
 
       - name: Check the reviewer changed no files
         # A tripwire, not a proof: it sees tracked and untracked changes in the
