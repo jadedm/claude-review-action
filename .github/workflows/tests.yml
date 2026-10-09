@@ -18,5 +18,5 @@ jobs:
         run: python3 scripts/test_gemini_review_parse.py
       - name: Gemini comment builder (#8)
         run: python3 scripts/test_gemini_review_comment.py
-      - name: Symlinked files never reach a prompt (sandbox#62)
+      - name: Prompt-building steps read nothing outside the checkout (sandbox#62)
         run: python3 scripts/test_safe_path.py

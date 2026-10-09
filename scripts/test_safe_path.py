@@ -81,6 +81,7 @@ def build_checkout(root):
     os.symlink(os.path.join(outside, "extras.md"), os.path.join(ws, "extras.md"))  # 8
     os.symlink(".git/config", os.path.join(ws, "gitcfg.py"))                      # 11
     os.symlink("notes.md", os.path.join(ws, "extras-link.md"))                    # in-repo extras link
+    os.symlink("missing.py", os.path.join(ws, "broken.py"))                       # dangling link
     prompts = os.path.join(ws, ".claude-review-action", "prompts")
     os.makedirs(prompts)
     for name in ("base.md", "python.md", "_gemini-tail.md"):
@@ -126,12 +127,13 @@ try:
     check("11 symlink into .git", not safe(ws, "gitcfg.py"))
     check("  .git file named directly", not safe(ws, ".git/config"))
     check("  missing file", not safe(ws, "deleted.py"))
+    check("  broken link", not safe(ws, "broken.py"))
     check("  absolute path outside", not safe(ws, os.path.join(root, "outside", "secret.txt")))
     check("  .. out of the checkout", not safe(ws, "src/../../outside/secret.txt"))
 
     print("gemini: Build review payload")
     changed = ["normal.py", "with space.py", "--bogus", "inner.py", "leak.py", "linkdir", "dirlink/secret.txt",
-               "evil/f.txt", "gitcfg.py", "deleted.py", "src", os.path.join(root, "outside", "secret.txt"),
+               "evil/f.txt", "gitcfg.py", "broken.py", "deleted.py", "src", os.path.join(root, "outside", "secret.txt"),
                "-", "src/deep.py"]
     open(os.path.join(tmp, "changed-files.txt"), "w").write("\n".join(changed) + "\n")
     open(os.path.join(tmp, "pr-diff.txt"), "w").write("diff --git a/normal.py b/normal.py\n")
@@ -148,7 +150,7 @@ try:
     check("1,9,10 nothing from outside the checkout is sent", SECRET not in code, code[:300])
     check("11 nothing from .git is sent", GIT_SECRET not in code, code[:300])
     check("  each refused path gets a notice", all(f"'{p}'" in result.stdout for p in
-          ["leak.py", "dirlink/secret.txt", "evil/f.txt", "gitcfg.py"]), result.stdout[-800:])
+          ["leak.py", "dirlink/secret.txt", "evil/f.txt", "gitcfg.py", "broken.py"]), result.stdout[-800:])
     check("  deleted files and folders get no notice", not any(f"'{p}'" in result.stdout for p in
           ["deleted.py", "src", "linkdir"]), result.stdout[-800:])
     check("8 extra_prompt_path symlinked outside is not read", SECRET not in prompt, prompt[:300])

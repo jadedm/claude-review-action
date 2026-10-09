@@ -204,7 +204,7 @@ jobs:
             [ ! -e "$f" ] && [ ! -L "$f" ] && continue
             [ -d "$f" ] && continue
             if ! safe_to_read "$f"; then
-              echo "::notice::Not sending '$f' to Gemini: it resolves outside the checkout or into .git"
+              echo "::notice::Not sending '$f' to Gemini: not a regular file inside the checkout (outside it, inside .git, or a broken link)"
               continue
             fi
             [ "$FILES_SENT" -ge "$MAX_FILES" ] && break
