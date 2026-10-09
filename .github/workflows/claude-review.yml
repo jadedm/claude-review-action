@@ -160,9 +160,16 @@ jobs:
           # and over a consumer's committed .claude/settings.json, which could
           # otherwise allow git or gh with the token already in the remote URL
           # and in GH_TOKEN.
+          #
+          # Tag mode also allows Read, Grep and Glob with no path limit, so text
+          # in the pull request could have the reviewer quote its own
+          # credentials into a comment. The Read rules cover the known stores:
+          # process environments (/proc), the home folder, the runner's temp
+          # folder (checkout credentials) and any .git folder (the App token is
+          # in the origin URL). The CLI applies Read rules to Grep and Glob too.
           use_commit_signing: true
           claude_args: >-
-            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*)"
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*),Read(//proc/**),Read(~/**),Read(//**/_temp/**),Read(**/.git/**)"
 
       - name: Check the reviewer changed no files
         # A tripwire, not a proof: it sees tracked and untracked changes in the
