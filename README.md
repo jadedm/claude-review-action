@@ -88,6 +88,12 @@ jobs:
 
 That's the entire integration. Updates to the prompts in this central repo propagate to every consumer on the next PR.
 
+### Do not switch the trigger to `pull_request_target`
+
+On a public repo, pull requests from forks get no secrets under `pull_request`, so both reviewers fail for outside contributors. Changing the trigger to `pull_request_target` makes them work by running the job with your secrets and a write token while it reads the fork's code. Anyone who opens a pull request can then steer a job holding your Claude token and Gemini key. Keep `pull_request`.
+
+A maintainer's `@claude` or `@gemini` comment on a fork's pull request also runs with secrets and reads the fork's content. Read the pull request before asking for a review on it.
+
 ### Mentioning the bots
 
 Both reviewers re-trigger when their handle is mentioned in a PR comment:
