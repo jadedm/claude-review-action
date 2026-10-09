@@ -88,6 +88,12 @@ jobs:
 
 That's the entire integration. Updates to the prompts in this central repo propagate to every consumer on the next PR.
 
+### Do not switch the trigger to `pull_request_target`
+
+On a public repo, pull requests from forks get no secrets under `pull_request`, so both reviewers fail for outside contributors. Changing the trigger to `pull_request_target` makes them work by running the job with your secrets and a write token while the model reads the fork's diff, and Claude can fetch the fork's files. Anyone who opens a pull request can then steer a job holding your Claude token and Gemini key. Keep `pull_request`.
+
+A maintainer's `@claude` comment on a fork's pull request also runs with secrets, and Claude reads the fork's files; `@gemini` sends the fork's diff. Read the pull request before asking for a review on it.
+
 ### Mentioning the bots
 
 Both reviewers re-trigger when their handle is mentioned in a PR comment:
@@ -102,7 +108,7 @@ The `if:` guard inside each reusable workflow handles the routing — there's no
 The stack prompts (`prompts/<stack>.md`) describe the **stack**, not your specific codebase. To layer in repo-specific conventions (custom guard names, internal paths, threshold tunings, project-specific lint rules), use one of:
 
 - **`extra_prompt: <inline string>`** — for short notes. Multi-line YAML strings get awkward beyond a paragraph.
-- **`extra_prompt_path: <path>`** — points at a markdown file inside the consumer repo (e.g. `.github/review-extras.md`). Read at workflow-run time and appended under a "Repo-specific notes" heading. Cleanest for long-form additions; the file lives in the consumer repo so a PR that changes both the code conventions and the review prompt for them is atomic.
+- **`extra_prompt_path: <path>`** — points at a markdown file inside the consumer repo (e.g. `.github/review-extras.md`). Read at workflow-run time and appended under a "Repo-specific notes" heading. A path that resolves outside the checkout or into `.git` (through a symlink, say) is skipped with a warning. Cleanest for long-form additions; the file lives in the consumer repo so a PR that changes both the code conventions and the review prompt for them is atomic.
 
 If both are set, file contents render first, then the inline string — both under one "Repo-specific notes" section.
 

@@ -18,3 +18,5 @@ jobs:
         run: python3 scripts/test_gemini_review_parse.py
       - name: Gemini comment builder (#8)
         run: python3 scripts/test_gemini_review_comment.py
+      - name: Prompt-building steps read no PR file from outside the checkout or .git (sandbox#62)
+        run: python3 scripts/test_safe_path.py

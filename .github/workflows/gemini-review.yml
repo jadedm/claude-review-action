@@ -179,19 +179,42 @@ jobs:
             exit 1
           fi
 
+          # The checkout is the pull request's content, so a path in it can be a
+          # symlink to a file elsewhere on the runner. Read a file only if its
+          # resolved path is inside the checkout and not under a .git folder.
+          # Kept identical in claude-review.yml; test_safe_path.py checks that.
+          WORKSPACE=$(pwd -P)
+          safe_to_read() {
+            local real
+            [ -f "$1" ] || return 1
+            real=$(realpath -- "$1") || return 1
+            case "$real" in
+              */.git/*) return 1 ;;
+              "$WORKSPACE"/*) return 0 ;;
+            esac
+            return 1
+          }
+
           CODE=""
           TOTAL_LINES=0
           FILES_SENT=0
 
           while IFS= read -r f; do
-            [ -f "$f" ] || continue
+            # Deleted by the pull request, or a folder (a submodule, or a link to
+            # a folder anywhere); nothing is read from either.
+            [ ! -e "$f" ] && [ ! -L "$f" ] && continue
+            [ -d "$f" ] && continue
+            if ! safe_to_read "$f"; then
+              echo "::notice::Not sending '$f' to Gemini: not a regular file inside the checkout (outside it, inside .git, or a broken link)"
+              continue
+            fi
             [ "$FILES_SENT" -ge "$MAX_FILES" ] && break
             LINES=$(wc -l < "$f" | tr -d ' ')
             [ "$LINES" -gt "$MAX_PER_FILE" ] && continue
             [ "$((TOTAL_LINES + LINES))" -gt "$MAX_TOTAL_LINES" ] && break
 
             CODE+="--- $f ---
-          $(cat "$f")
+          $(cat < "$f")
 
           "
             TOTAL_LINES=$((TOTAL_LINES + LINES))
@@ -209,14 +232,14 @@ jobs:
             # are appended under a single "Repo-specific notes" heading;
             # file contents render first, inline string second.
             EXTRAS_RENDERED=0
-            if [ -n "$EXTRA_PROMPT_PATH" ] && [ -f "$EXTRA_PROMPT_PATH" ]; then
+            if [ -n "$EXTRA_PROMPT_PATH" ] && safe_to_read "$EXTRA_PROMPT_PATH"; then
               echo ""
               echo "## Repo-specific notes"
               echo ""
               cat "$EXTRA_PROMPT_PATH"
               EXTRAS_RENDERED=1
             elif [ -n "$EXTRA_PROMPT_PATH" ]; then
-              echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' not found in consumer repo — skipping" >&2
+              echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' is missing, not a regular file, or resolves outside the checkout or into .git; skipping" >&2
             fi
             if [ -n "$EXTRA_PROMPT" ]; then
               if [ "$EXTRAS_RENDERED" -eq 0 ]; then
