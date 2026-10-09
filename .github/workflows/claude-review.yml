@@ -148,46 +148,38 @@ jobs:
           include_fix_links: true
           classify_inline_comments: true
           prompt: ${{ steps.prompt.outputs.PROMPT }}
-          # track_progress puts the action in tag mode, which grants file
-          # edits (acceptEdits) and git add/commit/rm plus a push wrapper, run
-          # with the Claude App token (contents: write, whatever this job's
-          # permissions say). A reviewer has no reason to write, and text in
-          # the pull request could ask it to. Deny rules win over the action's
-          # allow list; with nothing edited or committed, the push wrapper has
-          # nothing new to push.
+          # track_progress puts the action in tag mode, which lets Claude edit
+          # files (acceptEdits) and run git add, commit, rm and a push wrapper
+          # that accepts any branch name, all on the Claude App token. On a
+          # fork's pull request the fork's commits sit in a local branch, so
+          # the wrapper alone could push them into this repo. A reviewer has no
+          # reason to write. use_commit_signing swaps the git commands and the
+          # wrapper for two GitHub file tools, and also turns off the action's
+          # own auto-commit at cleanup; the deny list then removes those tools
+          # and the file edit tools. Deny rules win over the action's allow list.
+          use_commit_signing: true
           claude_args: >-
-            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,Bash(git add:*),Bash(git commit:*),Bash(git rm:*)"
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files"
 
       - name: Check the reviewer changed no files
-        # Proves the deny list above held: no edited files, and no commit that
-        # exists only on the runner (a committed edit leaves the tree clean).
-        # claude-code-action restores these paths from the base branch on pull
-        # requests and leaves them modified on purpose (SENSITIVE_PATHS in its
-        # restore-config.ts), and the prompts checkout lives inside the
-        # workspace, so all are excluded.
+        # A tripwire, not a proof: it sees tracked and untracked changes in the
+        # checkout, such as a filesystem command acceptEdits allowed. It does
+        # not see the excluded paths, ignored files, or anything outside the
+        # checkout. claude-code-action restores these paths from the base
+        # branch on pull requests and leaves them modified on purpose
+        # (SENSITIVE_PATHS in its restore-config.ts), and the prompts checkout
+        # lives inside the workspace, so all are excluded.
         if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
           set -euo pipefail
-          # A fork's PR is fetched into a local branch with no remote ref, so
-          # its own commits are excluded through the PR head, when present.
-          known=(--remotes)
-          head_sha=$(gh api "repos/$REPO/pulls/$PR_NUMBER" -q .head.sha)
-          if git cat-file -e "${head_sha}^{commit}" 2>/dev/null; then
-            known+=("$head_sha")
-          fi
           changes=$(git status --porcelain -- . \
             ':(exclude).claude-review-action' \
             ':(exclude).claude' ':(exclude).mcp.json' ':(exclude).claude.json' \
             ':(exclude).gitmodules' ':(exclude).ripgreprc' ':(exclude).husky' \
             ':(exclude)CLAUDE.md' ':(exclude)CLAUDE.local.md')
-          local_commits=$(git rev-list HEAD --not "${known[@]}")
-          if [ -n "$changes" ] || [ -n "$local_commits" ]; then
-            echo "::error::The review step changed the checkout; a reviewer must not write"
-            printf '%s\n' "$changes" "$local_commits"
+          if [ -n "$changes" ]; then
+            echo "::error::The review step changed files in the checkout; a reviewer must not write"
+            printf '%s\n' "$changes"
             exit 1
           fi
 
@@ -198,5 +190,5 @@ jobs:
           webhook_url: ${{ secrets.slack_webhook_url }}
           message: |
             🤖 *Claude* reviewed PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
-            Repo: ${{ github.repository }} | Status: ${{ steps.claude-review.outcome == 'success' && '✅ Completed' || '❌ Failed' }}
+            Repo: ${{ github.repository }} | Status: ${{ job.status == 'success' && '✅ Completed' || '❌ Failed' }}
             <${{ github.event.pull_request.html_url }}|View PR>
