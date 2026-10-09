@@ -90,7 +90,7 @@ That's the entire integration. Updates to the prompts in this central repo propa
 
 ### The Claude reviewer and your `.claude/settings.json`
 
-The Claude reviewer cannot edit files, commit, push, or read the places on the runner that hold its credentials: process environments, the runner's temp folder, `.git` folders, and credential files in the home folder. These are deny rules, and deny rules win. They name specific commands and paths, though, and Claude also reads your repo's committed `.claude/settings.json`. Do not allow broad commands there, such as `Bash(git:*)`, `Bash(curl:*)` or `Bash(gh:*)`. A rule like that hands back a way to write or to send data out that the deny list does not name, for example `git -C . push`.
+The Claude reviewer runs with no permission to edit files, commit or push, and with reads denied for the places on a runner known to hold credentials: process environments, `.git` folders, credential files in the home folder, the runner's workflow command and credential files, and the runner's own registration files. These are deny rules, and deny rules win, but they name specific commands and paths rather than fencing Claude into the checkout, so they cover the known places, not every place. Claude also applies your repo's `.claude/settings.json` and `.mcp.json` as they are on the pull request's base branch; a pull request cannot change them. Do not allow broad commands there, such as `Bash(git:*)`, `Bash(curl:*)` or `Bash(gh:*)`: a rule like that hands back a way to write or to send data out that the deny list does not name, for example `git -C . push`. On a self-hosted runner, keep other credentials off the machine, or in places this list names.
 
 ### Mentioning the bots
 

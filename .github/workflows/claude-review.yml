@@ -63,6 +63,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
+          # The reviewer can read files on the runner; leave no job token on
+          # disk. claude-code-action sets its own git credentials.
+          persist-credentials: false
 
       - name: Checkout review action repo (prompts)
         uses: actions/checkout@v6
@@ -71,6 +74,7 @@ jobs:
           ref: ${{ inputs.ref }}
           path: .claude-review-action
           token: ${{ github.token }}
+          persist-credentials: false
 
       - name: Compose prompt
         id: prompt
@@ -165,12 +169,20 @@ jobs:
           # in the pull request could have the reviewer quote its own
           # credentials into a comment. The Read rules cover the known stores:
           # process environments (/proc), credential folders in the home folder
-          # (not the whole home folder: hosted runners check out under it), the runner's temp
-          # folder (checkout credentials) and any .git folder (the App token is
-          # in the origin URL). The CLI applies Read rules to Grep and Glob too.
+          # (not the whole home folder: hosted runners check out under it), the
+          # runner's workflow command and credential files in its temp folder
+          # (the rest of it holds CI logs the reviewer may read), the runner's
+          # own registration files and logs, and any .git folder (the App token is
+          # in the origin URL). Claude Code applies Read rules to Grep and Glob
+          # on a best-effort basis. Both checkouts above keep no token on disk.
+          #
+          # The action also runs Claude with acceptEdits, which approves some
+          # shell file commands without a rule naming them. A reviewer needs
+          # none, so --permission-mode default replaces it; the action's own
+          # flag comes first and a later single-value flag wins.
           use_commit_signing: true
           claude_args: >-
-            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*),Read(//proc/**),Read(~/.claude/**),Read(~/.config/**),Read(~/.ssh/**),Read(~/.docker/**),Read(~/.git-credentials),Read(~/.gitconfig),Read(~/.aws/**),Read(~/.kube/**),Read(~/.azure/**),Read(~/.gnupg/**),Read(~/.npmrc),Read(~/.netrc),Read(~/.pypirc),Read(//**/_temp/**),Read(**/.git/**)"
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*),Read(//proc/**),Read(~/.claude/**),Read(~/.config/**),Read(~/.ssh/**),Read(~/.docker/**),Read(~/.git-credentials),Read(~/.gitconfig),Read(~/.aws/**),Read(~/.kube/**),Read(~/.azure/**),Read(~/.gnupg/**),Read(~/.npmrc),Read(~/.netrc),Read(~/.pypirc),Read(//**/_temp/_runner_file_commands/**),Read(//**/_temp/git-credentials-*),Read(//**/.credentials),Read(//**/.credentials_rsaparams),Read(//**/.runner),Read(//**/_diag/**),Read(**/.git/**)" --permission-mode default
 
       - name: Check the reviewer changed no files
         # A tripwire, not a proof: it sees tracked and untracked changes in the
