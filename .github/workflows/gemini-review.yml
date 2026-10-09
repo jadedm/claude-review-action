@@ -179,12 +179,20 @@ jobs:
             exit 1
           fi
 
+          # shellcheck source=/dev/null
+          . "$ROOT/scripts/safe_path.sh"
+
           CODE=""
           TOTAL_LINES=0
           FILES_SENT=0
 
           while IFS= read -r f; do
-            [ -f "$f" ] || continue
+            # A file deleted by the pull request is simply absent.
+            [ ! -e "$f" ] && [ ! -L "$f" ] && continue
+            if ! safe_to_read "$f"; then
+              echo "::notice::Not sending '$f' to Gemini: it is a symlink, not a regular file, or outside the checkout"
+              continue
+            fi
             [ "$FILES_SENT" -ge "$MAX_FILES" ] && break
             LINES=$(wc -l < "$f" | tr -d ' ')
             [ "$LINES" -gt "$MAX_PER_FILE" ] && continue
@@ -209,14 +217,14 @@ jobs:
             # are appended under a single "Repo-specific notes" heading;
             # file contents render first, inline string second.
             EXTRAS_RENDERED=0
-            if [ -n "$EXTRA_PROMPT_PATH" ] && [ -f "$EXTRA_PROMPT_PATH" ]; then
+            if [ -n "$EXTRA_PROMPT_PATH" ] && safe_to_read "$EXTRA_PROMPT_PATH"; then
               echo ""
               echo "## Repo-specific notes"
               echo ""
               cat "$EXTRA_PROMPT_PATH"
               EXTRAS_RENDERED=1
             elif [ -n "$EXTRA_PROMPT_PATH" ]; then
-              echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' not found in consumer repo — skipping" >&2
+              echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' is missing, a symlink, or outside the checkout; skipping" >&2
             fi
             if [ -n "$EXTRA_PROMPT" ]; then
               if [ "$EXTRAS_RENDERED" -eq 0 ]; then

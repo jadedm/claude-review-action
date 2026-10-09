@@ -96,6 +96,8 @@ jobs:
           if [ ! -f "$STACK_FILE" ]; then
             echo "::error::stack prompt '${STACK}' not found at $STACK_FILE"; exit 1
           fi
+          # shellcheck source=/dev/null
+          . "$ROOT/scripts/safe_path.sh"
 
           # Optional repo-specific addendum from a file inside the
           # consumer repo. Useful when the inline `extra_prompt` string
@@ -119,13 +121,11 @@ jobs:
             cat "$BASE"
             echo ""
             cat "$STACK_FILE"
-            if [ -n "$EXTRA_PROMPT_PATH" ]; then
-              if [ -f "$EXTRA_PROMPT_PATH" ]; then
-                render_extras_header_once
-                cat "$EXTRA_PROMPT_PATH"
-              else
-                echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' not found in consumer repo — skipping" >&2
-              fi
+            if [ -n "$EXTRA_PROMPT_PATH" ] && safe_to_read "$EXTRA_PROMPT_PATH"; then
+              render_extras_header_once
+              cat "$EXTRA_PROMPT_PATH"
+            elif [ -n "$EXTRA_PROMPT_PATH" ]; then
+              echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' is missing, a symlink, or outside the checkout; skipping" >&2
             fi
             if [ -n "$EXTRA_PROMPT" ]; then
               render_extras_header_once
