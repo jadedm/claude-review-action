@@ -63,9 +63,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
-          # The reviewer can read files on the runner; leave no job token on
-          # disk. claude-code-action sets its own git credentials.
-          persist-credentials: false
+          # Keeps the default persist-credentials: claude-code-action fetches
+          # the PR branch with these credentials, and a private repo fails
+          # without them. The file they live in is on the Read deny list below.
 
       - name: Checkout review action repo (prompts)
         uses: actions/checkout@v6
@@ -174,7 +174,7 @@ jobs:
           # (the rest of it holds CI logs the reviewer may read), the runner's
           # own registration files and logs, and any .git folder (the App token is
           # in the origin URL). Claude Code applies Read rules to Grep and Glob
-          # on a best-effort basis. Both checkouts above keep no token on disk.
+          # on a best-effort basis. The prompts checkout keeps no token on disk.
           #
           # The action also runs Claude with acceptEdits, which approves some
           # shell file commands without a rule naming them. A reviewer needs
