@@ -159,21 +159,35 @@ jobs:
             --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,Bash(git add:*),Bash(git commit:*),Bash(git rm:*)"
 
       - name: Check the reviewer changed no files
-        # Proves the deny list above held. claude-code-action restores these
-        # paths from the base branch on pull requests and leaves them modified
-        # on purpose (SENSITIVE_PATHS in its restore-config.ts), and the prompts
-        # checkout lives inside the workspace, so all are excluded.
+        # Proves the deny list above held: no edited files, and no commit that
+        # exists only on the runner (a committed edit leaves the tree clean).
+        # claude-code-action restores these paths from the base branch on pull
+        # requests and leaves them modified on purpose (SENSITIVE_PATHS in its
+        # restore-config.ts), and the prompts checkout lives inside the
+        # workspace, so all are excluded.
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
           set -euo pipefail
+          # A fork's PR is fetched into a local branch with no remote ref, so
+          # its own commits are excluded through the PR head, when present.
+          known=(--remotes)
+          head_sha=$(gh api "repos/$REPO/pulls/$PR_NUMBER" -q .head.sha)
+          if git cat-file -e "${head_sha}^{commit}" 2>/dev/null; then
+            known+=("$head_sha")
+          fi
           changes=$(git status --porcelain -- . \
             ':(exclude).claude-review-action' \
             ':(exclude).claude' ':(exclude).mcp.json' ':(exclude).claude.json' \
             ':(exclude).gitmodules' ':(exclude).ripgreprc' ':(exclude).husky' \
             ':(exclude)CLAUDE.md' ':(exclude)CLAUDE.local.md')
-          if [ -n "$changes" ]; then
-            echo "::error::The review step changed files in the checkout; a reviewer must not write"
-            printf '%s\n' "$changes"
+          local_commits=$(git rev-list HEAD --not "${known[@]}")
+          if [ -n "$changes" ] || [ -n "$local_commits" ]; then
+            echo "::error::The review step changed the checkout; a reviewer must not write"
+            printf '%s\n' "$changes" "$local_commits"
             exit 1
           fi
 
