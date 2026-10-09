@@ -172,7 +172,8 @@ jobs:
           # (not the whole home folder: hosted runners check out under it), the
           # runner's workflow command and credential files in its temp folder
           # (the rest of it holds CI logs the reviewer may read), the runner's
-          # own registration files and logs, and any .git folder (the App token is
+          # own registration files and logs, and .git folders under the working
+          # directory, which includes the prompts checkout (the App token is
           # in the origin URL). Claude Code applies Read rules to Grep and Glob
           # on a best-effort basis. The prompts checkout keeps no token on disk.
           #
@@ -186,7 +187,7 @@ jobs:
 
       - name: Check the reviewer changed no files
         # A tripwire, not a proof: it sees tracked and untracked changes in the
-        # checkout, such as a filesystem command acceptEdits allowed. It does
+        # checkout, such as an edit some future change lets through. It does
         # not see the excluded paths, ignored files, or anything outside the
         # checkout. claude-code-action restores these paths from the base
         # branch on pull requests and leaves them modified on purpose
