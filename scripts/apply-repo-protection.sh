@@ -27,7 +27,13 @@ done
 show() {
   echo "  actions token:  $(gh api "repos/$repo/actions/permissions/workflow" \
     -q '"default=\(.default_workflow_permissions) can_approve_prs=\(.can_approve_pull_request_reviews)"')"
-  echo "  rulesets:       $(gh api "repos/$repo/rulesets" -q '[.[] | "\(.name) (\(.target), \(.enforcement))"] | if length == 0 then "none" else join(", ") end')"
+  echo "  rulesets:"
+  local ids id
+  ids=$(gh api "repos/$repo/rulesets" -q '.[].id')
+  [ -n "$ids" ] || echo "    none"
+  for id in $ids; do
+    gh api "repos/$repo/rulesets/$id" -q '"    \(.name): \(.target) \(.enforcement), refs=\(.conditions.ref_name.include | join(",")), rules=\([.rules[].type] | join(",")), bypass=\([.bypass_actors[]? | "\(.actor_type):\(.actor_id)"] | join(",") | if . == "" then "none" else . end)"'
+  done
 }
 
 ruleset_exists() {
@@ -37,7 +43,7 @@ ruleset_exists() {
 create_ruleset() {
   local name=$1 body=$2
   if ruleset_exists "$name"; then
-    echo "  skip: ruleset '$name' already exists"
+    echo "  skip: ruleset '$name' already exists; compare its rules in the After listing with this script"
     return 0
   fi
   if [ "$dry_run" -eq 1 ]; then
