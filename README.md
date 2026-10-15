@@ -2,7 +2,9 @@
 
 Reusable GitHub Actions workflows for running AI code review on every pull request. Two parallel reviewers, severity-rated findings, optional Slack notification.
 
-- **Claude** — via [`anthropics/claude-code-action@v1`](https://github.com/anthropics/claude-code-action). OAuth-authed; posts inline review comments and a top-level summary.
+- **Claude** — via [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action), pinned to the v1.0.251 commit. OAuth-authed; posts inline review comments and a top-level summary.
+
+Every third-party action in the reusable workflows is pinned to a full commit SHA, with its version in a trailing comment. A tag can be moved by whoever controls the upstream repo, and these steps hold the caller's tokens. Dependabot (`.github/dependabot.yml`) opens a weekly pull request when a pinned action has a newer release.
 - **Gemini** — direct call to the Gemini 2.5 API. Posts a single comment with severity-tagged findings rendered from a JSON response.
 
 Both reviewers load:

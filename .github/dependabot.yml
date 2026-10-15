@@ -1,0 +1,8 @@
+# Opens a weekly pull request when a pinned action in .github/workflows has a newer release,
+# so the commit pins stay current without going back to movable tags (#22).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
