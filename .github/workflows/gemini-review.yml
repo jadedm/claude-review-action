@@ -12,7 +12,7 @@ on:
         type: string
         default: '"ubuntu-latest"'
       ref:
-        description: 'Ref of this repo to load prompts and the Slack action from (tag / branch / sha). Set it to the same SHA when pinning this workflow by SHA'
+        description: 'Ref of this repo to load prompts, scripts and the Slack action from (tag / branch / sha). Set it to the same SHA when pinning this workflow by SHA'
         type: string
         default: 'v1'
       model:

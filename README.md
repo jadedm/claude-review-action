@@ -131,7 +131,7 @@ Example `.github/review-extras.md` in a consumer repo:
 |---|---|---|---|
 | `stack` | string | (required) | Prompt template name in `prompts/<stack>.md` |
 | `runner` | string (JSON) | `"ubuntu-latest"` | `runs-on` value, JSON-encoded |
-| `ref` | string | `v1` | Ref of this repo to load prompts and the Slack action from. `v1` moves with releases; a caller that pins the workflow to a commit SHA should set `ref` to the same SHA |
+| `ref` | string | `v1` | Ref of this repo to load prompts, scripts and the Slack action from. `v1` moves with releases; a caller that pins the workflow to a commit SHA should set `ref` to the same SHA |
 | `slack_notify` | boolean | `false` | Post a Slack message on completion |
 | `extra_prompt` | string | `''` | Inline repo-specific addendum |
 | `extra_prompt_path` | string | `''` | Path (in consumer repo) to a markdown file appended after the stack prompt |
