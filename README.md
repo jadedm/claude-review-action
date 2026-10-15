@@ -3,9 +3,9 @@
 Reusable GitHub Actions workflows for running AI code review on every pull request. Two parallel reviewers, severity-rated findings, optional Slack notification.
 
 - **Claude** — via [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action), pinned to the v1.0.251 commit. OAuth-authed; posts inline review comments and a top-level summary.
+- **Gemini** — direct call to the Gemini 2.5 API. Posts a single comment with severity-tagged findings rendered from a JSON response.
 
 Every third-party action in the reusable workflows is pinned to a full commit SHA, with its version in a trailing comment. A tag can be moved by whoever controls the upstream repo, and these steps hold the caller's tokens. Dependabot (`.github/dependabot.yml`) opens a weekly pull request when a pinned action has a newer release.
-- **Gemini** — direct call to the Gemini 2.5 API. Posts a single comment with severity-tagged findings rendered from a JSON response.
 
 Both reviewers load:
 
@@ -131,7 +131,7 @@ Example `.github/review-extras.md` in a consumer repo:
 |---|---|---|---|
 | `stack` | string | (required) | Prompt template name in `prompts/<stack>.md` |
 | `runner` | string (JSON) | `"ubuntu-latest"` | `runs-on` value, JSON-encoded |
-| `ref` | string | `v1` | Pinned ref of this central repo for prompts |
+| `ref` | string | `v1` | Ref of this repo to load prompts and the Slack action from. `v1` moves with releases; a caller that pins the workflow to a commit SHA should set `ref` to the same SHA |
 | `slack_notify` | boolean | `false` | Post a Slack message on completion |
 | `extra_prompt` | string | `''` | Inline repo-specific addendum |
 | `extra_prompt_path` | string | `''` | Path (in consumer repo) to a markdown file appended after the stack prompt |
