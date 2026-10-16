@@ -148,6 +148,7 @@ All Claude inputs above, plus:
 | `max_files` | number | `50` | Cap on file count |
 | `max_diff_lines` | number | `5000` | Cap on diff lines sent to Gemini |
 | `max_payload_bytes` | number | `2000000` | Cap on diff plus source bytes, for files with very long lines |
+| `max_chunks` | number | `3` | A pull request over the caps is split into up to this many parallel calls (1 to 5), each within the caps; findings merge into one comment |
 
 ## Secrets required
 

@@ -20,7 +20,7 @@ on:
         type: string
         default: 'gemini-4-argon'
       max_total_lines:
-        description: 'Max total source lines included in review payload'
+        description: 'Max total source lines per Gemini call'
         type: number
         default: 20000
       max_per_file:
@@ -28,7 +28,7 @@ on:
         type: number
         default: 3000
       max_files:
-        description: 'Max number of files included in review payload'
+        description: 'Max number of files per Gemini call'
         type: number
         default: 50
       max_diff_lines:
@@ -39,6 +39,10 @@ on:
         description: 'Max bytes of diff plus source in review payload. Line caps miss a file with very long lines'
         type: number
         default: 2000000
+      max_chunks:
+        description: 'Large pull requests are split into up to this many parallel Gemini calls, each within the caps above (1 to 5; 1 is a single call)'
+        type: number
+        default: 3
       slack_notify:
         description: 'Whether to send a Slack notification after the run'
         type: boolean
@@ -173,12 +177,14 @@ jobs:
 
       - name: Build review payload
         if: steps.files.outputs.count > 0
+        id: payload
         env:
           MAX_TOTAL_LINES: ${{ inputs.max_total_lines }}
           MAX_PER_FILE: ${{ inputs.max_per_file }}
           MAX_FILES: ${{ inputs.max_files }}
           MAX_DIFF_LINES: ${{ inputs.max_diff_lines }}
           MAX_PAYLOAD_BYTES: ${{ inputs.max_payload_bytes }}
+          MAX_CHUNKS: ${{ inputs.max_chunks }}
           # IMPORTANT: pass user-controlled inputs via env, NEVER interpolate
           # ${{ inputs.* }} directly into bash. Direct interpolation lets
           # backticks / $(...) inside a consumer's extra_prompt run as shell
@@ -197,80 +203,14 @@ jobs:
             exit 1
           fi
 
-          # The diff goes first so it counts against the byte budget. Every
-          # file left out is recorded with its reason (#29), as JSON so a
-          # name holding a tab or quote stays one record, and the comment
-          # step says what Gemini did not see.
-          # python3 rather than head and jq: a byte cut must not split a
-          # UTF-8 character (the prompt step decodes strictly), a cut inside
-          # the last line must still count as a cut, and a self-hosted runner
-          # may lack jq. Lines split on \n only, as head -n does.
-          count_lines() { python3 -c 'import io, sys; print(len(io.open(sys.argv[1], "rb").readlines()))' "$1"; }
-          DIFF_CUT=$(python3 - "$MAX_DIFF_LINES" "$MAX_PAYLOAD_BYTES" <<'PY'
-          import io, sys
-          max_lines, max_bytes = map(int, sys.argv[1:])
-          data = open("/tmp/pr-diff.txt", "rb").read()
-          clipped = b"".join(io.BytesIO(data).readlines()[:max_lines])[:max_bytes]
-          with open("/tmp/pr-diff-sent.txt", "wb") as f:
-              f.write(clipped.decode("utf-8", "ignore").encode("utf-8"))  # "replace" adds bytes past the cap
-          print("true" if len(clipped) < len(data) else "false")
-          PY
-          )
-          DIFF=$(cat /tmp/pr-diff-sent.txt)
-          DIFF_SENT=$(count_lines /tmp/pr-diff-sent.txt)
-          DIFF_TOTAL=$(count_lines /tmp/pr-diff.txt)
-          TOTAL_BYTES=$(wc -c < /tmp/pr-diff-sent.txt | tr -d ' ')
-
-          OMITTED=/tmp/review-omitted.jsonl
-          : > "$OMITTED"
-          omit() { python3 -c 'import json, sys; print(json.dumps({"file": sys.argv[1], "reason": sys.argv[2]}))' "$1" "$2" >> "$OMITTED"; }
-          # A pull request controls its files, symlinks included. A link to
-          # .git/config or to a runner file must not be read into the prompt.
-          inside_checkout() {
-            python3 -c 'import os, sys; root = os.path.realpath("."); p = os.path.realpath(sys.argv[1]); sys.exit(0 if p.startswith(root + os.sep) and not p.startswith(os.path.join(root, ".git") + os.sep) else 1)' "$1"
-          }
-
-          CODE=""
-          TOTAL_LINES=0
-          FILES_SENT=0
-
-          # One question per guard; a file that does not fit is skipped and
-          # the loop goes on, so smaller files later in the list still fit.
-          while IFS= read -r f; do
-            if [ -L "$f" ]; then omit "$f" "a symlink, not read"; continue; fi
-            if ! inside_checkout "$f"; then omit "$f" "outside the checkout, not read"; continue; fi
-            if [ ! -f "$f" ]; then
-              # Usually deleted, and the removal is in the diff unless the diff
-              # was cut first. On an @gemini comment the checkout is the default
-              # branch (#16), so a file the PR adds is missing here too.
-              grep -qF -- "diff --git a/$f b/" <<<"$DIFF" || omit "$f" "not in the checkout, and past the diff cut"
-              continue
-            fi
-            if [ "$FILES_SENT" -ge "$MAX_FILES" ]; then omit "$f" "over the ${MAX_FILES}-file limit"; continue; fi
-            LINES=$(wc -l < "$f" | tr -d ' ')
-            BYTES=$(wc -c < "$f" | tr -d ' ')
-            if [ "$LINES" -gt "$MAX_PER_FILE" ]; then omit "$f" "over ${MAX_PER_FILE} lines"; continue; fi
-            if [ "$((TOTAL_LINES + LINES))" -gt "$MAX_TOTAL_LINES" ]; then omit "$f" "over the ${MAX_TOTAL_LINES}-line total"; continue; fi
-            if [ "$((TOTAL_BYTES + BYTES))" -gt "$MAX_PAYLOAD_BYTES" ]; then omit "$f" "over the ${MAX_PAYLOAD_BYTES}-byte total"; continue; fi
-
-            CODE+="--- $f ---
-          $(cat < "$f")
-
-          "
-            TOTAL_LINES=$((TOTAL_LINES + LINES))
-            TOTAL_BYTES=$((TOTAL_BYTES + BYTES))
-            FILES_SENT=$((FILES_SENT + 1))
-          done < /tmp/changed-files.txt
-
-          FILTERED=$(( $(count_lines /tmp/all-changed-files.txt) - $(count_lines /tmp/changed-files.txt) ))
-          python3 - "$OMITTED" "$FILTERED" "$DIFF_SENT" "$DIFF_TOTAL" "$DIFF_CUT" > /tmp/review-coverage.json <<'PY'
-          import json, sys
-          path, filtered, sent, total = sys.argv[1], *map(int, sys.argv[2:5])
-          omitted = [json.loads(line) for line in open(path)]
-          print(json.dumps({"omitted": omitted, "filtered": filtered, "diff_sent": sent, "diff_total": total,
-                            "diff_cut": sys.argv[5] == "true"}))
-          PY
-          echo "Sent ${FILES_SENT} files, ${TOTAL_LINES} lines, ${TOTAL_BYTES} bytes; left out $(count_lines "$OMITTED"); diff ${DIFF_SENT} of ${DIFF_TOTAL} lines"
+          # Split the pull request into up to max_chunks calls, each within
+          # the caps, and record every file no call will see (#29, #30).
+          # Python rather than bash: it reads files by name without shell
+          # parsing, never follows a PR's symlinks, and cuts on whole UTF-8
+          # characters. It prints the number of calls.
+          rm -rf /tmp/review-chunks
+          CALLS=$(python3 "$ROOT/scripts/gemini_chunks.py" /tmp/review-chunks)
+          echo "calls=${CALLS}" >> "$GITHUB_OUTPUT"
 
           {
             cat "$BASE"
@@ -307,9 +247,6 @@ jobs:
             cat "$ROOT/prompts/_gemini-tail.md"
           } > /tmp/review-prompt.txt
 
-          echo "$CODE" > /tmp/review-code.txt
-          echo "$DIFF" > /tmp/review-diff.txt
-
       - name: Call Gemini API
         if: steps.files.outputs.count > 0
         id: gemini
@@ -319,23 +256,7 @@ jobs:
         run: |
           set -euo pipefail
           PROMPT=$(cat /tmp/review-prompt.txt)
-          CODE=$(cat /tmp/review-code.txt)
-          DIFF=$(cat /tmp/review-diff.txt)
-
-          FULL_PROMPT="${PROMPT}
-
-          ## Changed Files
-
-          ${CODE}
-
-          ## Git Diff
-
-          ${DIFF}"
-
-          PROMPT_ESCAPED=$(echo "$FULL_PROMPT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.buffer.read().decode("utf-8", "replace")))')
-
           API_URL="https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent"
-          RESULT_FILE=/tmp/gemini-result.json
 
           # Thinking models spend output tokens on thinking, and they count
           # against maxOutputTokens. A 5,000-line payload took 110 s and 15,420
@@ -343,18 +264,34 @@ jobs:
           # gemini-4-argon (#27). At the #29 caps, 238k prompt tokens took 28 s
           # on gemini-4-argon; 137k took 241 s on gemini-3.8-flash, which
           # thinks longer, so a Flash caller with large PRs may hit 300 s.
-          HTTP_CODE=""
-          for attempt in 1 2 3; do
-            CURL_RC=0
-            HTTP_CODE=$(curl -s -w "%{http_code}" -o "$RESULT_FILE" \
-              "$API_URL" \
-              -H 'Content-Type: application/json' \
-              -H "X-goog-api-key: ${GEMINI_API_KEY}" \
-              --max-time 300 \
-              -X POST \
-              -d @- <<CURL_EOF
+          #
+          # One call per chunk (#30), run in parallel. A call records its
+          # outcome in <dir>/status (ok, unreadable or failed) and never ends
+          # the step itself, so one failed call cannot cancel the others; the
+          # merge below decides what the step does.
+          call_chunk() {
+            local dir=$1 result="$1/result.json" attempt http rc full escaped
+            full="${PROMPT}
+
+          ## Changed Files
+
+          $(cat "$dir/code.txt")
+
+          ## Git Diff
+
+          $(cat "$dir/diff.txt")"
+            escaped=$(printf '%s\n' "$full" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.buffer.read().decode("utf-8", "replace")))')
+            for attempt in 1 2 3; do
+              rc=0
+              http=$(curl -s -w "%{http_code}" -o "$result" \
+                "$API_URL" \
+                -H 'Content-Type: application/json' \
+                -H "X-goog-api-key: ${GEMINI_API_KEY}" \
+                --max-time 300 \
+                -X POST \
+                -d @- <<CURL_EOF
           {
-            "contents": [{"parts": [{"text": ${PROMPT_ESCAPED}}]}],
+            "contents": [{"parts": [{"text": ${escaped}}]}],
             "generationConfig": {
               "maxOutputTokens": 65536,
               "temperature": 1.0,
@@ -362,44 +299,52 @@ jobs:
             }
           }
           CURL_EOF
-            ) || CURL_RC=$?
-
-            # Without this, set -e ended the step on a curl failure with no
-            # message at all.
-            if [ "$CURL_RC" -ne 0 ]; then
-              echo "Gemini API request failed (curl exit ${CURL_RC}; 28 means no reply within 300 s)"
-              exit 1
-            fi
-
-            if [ "$HTTP_CODE" = "200" ]; then
-              break
-            elif [ "$HTTP_CODE" = "429" ] || [ "$HTTP_CODE" = "503" ]; then
+              ) || rc=$?
+              if [ "$rc" -ne 0 ]; then
+                echo "Gemini API request failed (curl exit ${rc}; 28 means no reply within 300 s)"
+                echo failed > "$dir/status"
+                return 0
+              fi
+              if [ "$http" = "200" ]; then break; fi
+              if [ "$http" != "429" ] && [ "$http" != "503" ]; then
+                echo "Gemini API error (HTTP ${http}):"
+                cat "$result"; echo
+                echo failed > "$dir/status"
+                return 0
+              fi
               [ "$attempt" -lt 3 ] && sleep $((5 * attempt))
-            else
-              echo "Gemini API error (HTTP ${HTTP_CODE}):"
-              cat "$RESULT_FILE"
-              exit 1
+            done
+            if [ "$http" != "200" ]; then
+              echo "Gemini API failed after 3 attempts (last HTTP ${http}):"
+              cat "$result"; echo
+              echo failed > "$dir/status"
+              return 0
             fi
+            # Gemini quotes code with backslashes such as \d inside its JSON
+            # reply; the parser repairs those escapes (#8). Exit 2 means the
+            # reply was unreadable, and the raw text stays in this log only.
+            rc=0
+            python3 .claude-review-action/scripts/gemini_review_parse.py "$result" "$dir/review.json" || rc=$?
+            if [ "$rc" -eq 0 ]; then echo ok > "$dir/status"; return 0; fi
+            if [ "$rc" -eq 2 ]; then echo unreadable > "$dir/status"; return 0; fi
+            echo failed > "$dir/status"
+          }
+
+          for dir in /tmp/review-chunks/*/; do
+            call_chunk "${dir%/}" > "${dir%/}/log" 2>&1 &
+          done
+          wait  # each call wrote its own status; a missing status counts as failed
+
+          for dir in /tmp/review-chunks/*/; do
+            echo "::group::Call ${dir%/}: $(cat "${dir}status" 2>/dev/null || echo failed)"
+            cat "${dir}log"
+            echo "::endgroup::"
           done
 
-          # Fail explicitly when all three attempts came back 429 / 503 —
-          # otherwise the loop ends with HTTP_CODE still non-200 and the
-          # python parser below crashes with a KeyError trying to read
-          # data['candidates'] from a Gemini error envelope.
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "Gemini API failed after 3 attempts (last HTTP ${HTTP_CODE}):"
-            cat "$RESULT_FILE"
-            exit 1
-          fi
-
-          # Extract and validate the review (#8). Gemini quotes code with
-          # backslashes such as \d inside its JSON reply; the parser repairs
-          # those escapes. Exit 2 means the reply was unreadable: the next step
-          # posts a fixed notice and fails the job, so the raw model text never
-          # reaches the pull request.
-          rc=0
-          python3 .claude-review-action/scripts/gemini_review_parse.py "$RESULT_FILE" /tmp/gemini-review.json || rc=$?
-          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then exit "$rc"; fi
+          # One review from all calls. Exit 1 when every call failed; when
+          # none succeeded but one was unreadable, it writes the unreadable
+          # marker and the next step posts the fixed notice and fails, as before.
+          python3 .claude-review-action/scripts/gemini_review_merge.py /tmp/review-chunks /tmp/gemini-review.json /tmp/review-coverage.json
 
       - name: Post review comment
         if: steps.files.outputs.count > 0

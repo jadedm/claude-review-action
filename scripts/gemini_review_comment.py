@@ -128,7 +128,14 @@ def build_comment(review, coverage=None):
         return UNPARSED if not section else UNPARSED.replace("\n".join(_FOOTER), "\n".join(section + _FOOTER))
 
     lines = ["### Gemini Code Review", ""]
-    lines += [f"**Summary:** {inert(review.get('summary', '(no summary)'))}", ""]
+    parts = review.get("parts") or []
+    if parts:
+        # A pull request split into several calls (#30): one line per call, each
+        # capped on its own so a long first part cannot hide the others.
+        lines += ["**Summary:**", ""] + [f"- **{inert(p.get('label', ''), 40)}:** {inert(p.get('summary', ''))}"
+                                         for p in parts] + [""]
+    else:
+        lines += [f"**Summary:** {inert(review.get('summary', '(no summary)'))}", ""]
 
     issues = review.get("issues") or []
     body = []
