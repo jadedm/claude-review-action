@@ -102,7 +102,7 @@ def coverage_section(coverage):
     filtered = int(coverage.get("filtered") or 0)
     diff_sent = int(coverage.get("diff_sent") or 0)
     diff_total = int(coverage.get("diff_total") or 0)
-    diff_cut = diff_sent < diff_total
+    diff_cut = bool(coverage.get("diff_cut", diff_sent < diff_total))
     if not (omitted or filtered or diff_cut):
         return []
 
@@ -115,8 +115,10 @@ def coverage_section(coverage):
         lines.append("")
     if filtered:
         lines += [f"{filtered} lock, generated or binary files were skipped by design.", ""]
-    if diff_cut:
+    if diff_cut and diff_sent < diff_total:
         lines += [f"The diff was cut to its first {diff_sent:,} of {diff_total:,} lines.", ""]
+    if diff_cut and diff_sent >= diff_total:
+        lines += ["The diff was cut at the byte limit, inside its last line.", ""]
     return lines
 
 

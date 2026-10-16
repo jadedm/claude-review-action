@@ -134,5 +134,8 @@ worst = max(len(build_comment({"summary": "s", "issues": [
 check("29.21 a near-full review plus 500 long left-out names stays under the limit", worst <= COMMENT_LIMIT, worst)
 check("  and keeps the section", "### Not reviewed" in build_comment(many, long_names))
 
+comment = build_comment(small, {"omitted": [], "diff_sent": 1, "diff_total": 1, "diff_cut": True})
+check("29.24 a cut inside the last line is said", "cut at the byte limit" in comment and "first 1 of 1" not in comment, comment)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -90,6 +90,9 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
+          # Nothing later needs git credentials, and a saved token in
+          # .git/config is one file read away from the prompt (#29).
+          persist-credentials: false
 
       - name: Checkout review action repo (prompts)
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -198,13 +201,22 @@ jobs:
           # file left out is recorded with its reason (#29), as JSON so a
           # name holding a tab or quote stays one record, and the comment
           # step says what Gemini did not see.
-          # Two steps through a file, not `head -n | head -c`: under pipefail
-          # the first head dies of SIGPIPE when the second stops reading.
-          # python3 rather than jq, which a self-hosted runner may lack.
-          head -n "$MAX_DIFF_LINES" /tmp/pr-diff.txt > /tmp/pr-diff-lines.txt
-          DIFF=$(head -c "$MAX_PAYLOAD_BYTES" /tmp/pr-diff-lines.txt)
-          count_lines() { python3 -c 'import sys; print(len(open(sys.argv[1], "rb").read().splitlines()))' "$1"; }
-          printf '%s' "$DIFF" > /tmp/pr-diff-sent.txt
+          # python3 rather than head and jq: a byte cut must not split a
+          # UTF-8 character (the prompt step decodes strictly), a cut inside
+          # the last line must still count as a cut, and a self-hosted runner
+          # may lack jq. Lines split on \n only, as head -n does.
+          count_lines() { python3 -c 'import io, sys; print(len(io.open(sys.argv[1], "rb").readlines()))' "$1"; }
+          DIFF_CUT=$(python3 - "$MAX_DIFF_LINES" "$MAX_PAYLOAD_BYTES" <<'PY'
+          import io, sys
+          max_lines, max_bytes = map(int, sys.argv[1:])
+          data = open("/tmp/pr-diff.txt", "rb").read()
+          clipped = b"".join(io.BytesIO(data).readlines()[:max_lines])[:max_bytes]
+          with open("/tmp/pr-diff-sent.txt", "wb") as f:
+              f.write(clipped.decode("utf-8", "replace").encode("utf-8"))
+          print("true" if len(clipped) < len(data) else "false")
+          PY
+          )
+          DIFF=$(cat /tmp/pr-diff-sent.txt)
           DIFF_SENT=$(count_lines /tmp/pr-diff-sent.txt)
           DIFF_TOTAL=$(count_lines /tmp/pr-diff.txt)
           TOTAL_BYTES=$(wc -c < /tmp/pr-diff-sent.txt | tr -d ' ')
@@ -212,6 +224,11 @@ jobs:
           OMITTED=/tmp/review-omitted.jsonl
           : > "$OMITTED"
           omit() { python3 -c 'import json, sys; print(json.dumps({"file": sys.argv[1], "reason": sys.argv[2]}))' "$1" "$2" >> "$OMITTED"; }
+          # A pull request controls its files, symlinks included. A link to
+          # .git/config or to a runner file must not be read into the prompt.
+          inside_checkout() {
+            python3 -c 'import os, sys; root = os.path.realpath("."); p = os.path.realpath(sys.argv[1]); sys.exit(0 if p.startswith(root + os.sep) and not p.startswith(os.path.join(root, ".git") + os.sep) else 1)' "$1"
+          }
 
           CODE=""
           TOTAL_LINES=0
@@ -220,9 +237,13 @@ jobs:
           # One question per guard; a file that does not fit is skipped and
           # the loop goes on, so smaller files later in the list still fit.
           while IFS= read -r f; do
+            if [ -L "$f" ]; then omit "$f" "a symlink, not read"; continue; fi
+            if ! inside_checkout "$f"; then omit "$f" "outside the checkout, not read"; continue; fi
             if [ ! -f "$f" ]; then
-              # Deleted: its removal is in the diff, unless the diff was cut first.
-              grep -qF -- "diff --git a/$f b/" <<<"$DIFF" || omit "$f" "deleted, and past the diff cut"
+              # Usually deleted, and the removal is in the diff unless the diff
+              # was cut first. On an @gemini comment the checkout is the default
+              # branch (#16), so a file the PR adds is missing here too.
+              grep -qF -- "diff --git a/$f b/" <<<"$DIFF" || omit "$f" "not in the checkout, and past the diff cut"
               continue
             fi
             if [ "$FILES_SENT" -ge "$MAX_FILES" ]; then omit "$f" "over the ${MAX_FILES}-file limit"; continue; fi
@@ -233,7 +254,7 @@ jobs:
             if [ "$((TOTAL_BYTES + BYTES))" -gt "$MAX_PAYLOAD_BYTES" ]; then omit "$f" "over the ${MAX_PAYLOAD_BYTES}-byte total"; continue; fi
 
             CODE+="--- $f ---
-          $(cat "$f")
+          $(cat < "$f")
 
           "
             TOTAL_LINES=$((TOTAL_LINES + LINES))
@@ -242,11 +263,12 @@ jobs:
           done < /tmp/changed-files.txt
 
           FILTERED=$(( $(count_lines /tmp/all-changed-files.txt) - $(count_lines /tmp/changed-files.txt) ))
-          python3 - "$OMITTED" "$FILTERED" "$DIFF_SENT" "$DIFF_TOTAL" > /tmp/review-coverage.json <<'PY'
+          python3 - "$OMITTED" "$FILTERED" "$DIFF_SENT" "$DIFF_TOTAL" "$DIFF_CUT" > /tmp/review-coverage.json <<'PY'
           import json, sys
-          path, filtered, sent, total = sys.argv[1], *map(int, sys.argv[2:])
+          path, filtered, sent, total = sys.argv[1], *map(int, sys.argv[2:5])
           omitted = [json.loads(line) for line in open(path)]
-          print(json.dumps({"omitted": omitted, "filtered": filtered, "diff_sent": sent, "diff_total": total}))
+          print(json.dumps({"omitted": omitted, "filtered": filtered, "diff_sent": sent, "diff_total": total,
+                            "diff_cut": sys.argv[5] == "true"}))
           PY
           echo "Sent ${FILES_SENT} files, ${TOTAL_LINES} lines, ${TOTAL_BYTES} bytes; left out $(count_lines "$OMITTED"); diff ${DIFF_SENT} of ${DIFF_TOTAL} lines"
 
@@ -310,16 +332,17 @@ jobs:
 
           ${DIFF}"
 
-          PROMPT_ESCAPED=$(echo "$FULL_PROMPT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))')
+          PROMPT_ESCAPED=$(echo "$FULL_PROMPT" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.buffer.read().decode("utf-8", "replace")))')
 
           API_URL="https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent"
           RESULT_FILE=/tmp/gemini-result.json
 
           # Thinking models spend output tokens on thinking, and they count
-          # against maxOutputTokens. A full payload (about 5,000 lines) took
-          # 110 s and 15,420 output tokens on gemini-3.1-pro-preview, and 22 to
-          # 31 s on gemini-4-argon (#27); the old 16384 / 120 s limits left
-          # no room.
+          # against maxOutputTokens. A 5,000-line payload took 110 s and 15,420
+          # output tokens on gemini-3.1-pro-preview, and 22 to 31 s on
+          # gemini-4-argon (#27). At the #29 caps, 238k prompt tokens took 28 s
+          # on gemini-4-argon; 137k took 241 s on gemini-3.8-flash, which
+          # thinks longer, so a Flash caller with large PRs may hit 300 s.
           HTTP_CODE=""
           for attempt in 1 2 3; do
             CURL_RC=0

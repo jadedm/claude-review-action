@@ -75,6 +75,9 @@ def run_steps(files, changed, diff, env=None, gh_fails=False):
     for path, content in files.items():
         target = work / path
         target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, Link):
+            target.symlink_to(content.to)
+            continue
         target.write_bytes(content.encode() if isinstance(content, str) else content)
     pathlib.Path("/tmp/pr-diff.txt").write_text(diff)
     out = work / "_out"
@@ -94,6 +97,12 @@ def run_steps(files, changed, diff, env=None, gh_fails=False):
     return collect, build, coverage, code
 
 
+class Link:
+    """A fixture file that is a symlink to `to`."""
+    def __init__(self, to):
+        self.to = to
+
+
 def lines(n, tag="x"):
     return "".join(f"{tag}{i}\n" for i in range(n))
 
@@ -109,7 +118,7 @@ def sent(code, name):
 print("caps")
 c, b, cov, code = run_steps({"a.py": lines(10)}, ["a.py"], "diff --git a/a.py b/a.py\n+x\n")
 check("1 under every cap: sent, nothing left out",
-      b.returncode == 0 and sent(code, "a.py") and cov == {"omitted": [], "filtered": 0, "diff_sent": 2, "diff_total": 2},
+      b.returncode == 0 and sent(code, "a.py") and cov == {"omitted": [], "filtered": 0, "diff_sent": 2, "diff_total": 2, "diff_cut": False},
       (b.stderr, cov))
 
 c, b, cov, code = run_steps({"big.py": lines(3001), "ok.py": lines(3000)}, ["big.py", "ok.py"], "")
@@ -147,7 +156,7 @@ c, b, cov, code = run_steps({"a.py": lines(1)}, ["a.py", "gone.py", "gone2.py"],
                             "diff --git a/gone.py b/gone.py\n-x\n" + lines(10, "+d") + "diff --git a/gone2.py b/gone2.py\n-y\n",
                             env={"MAX_DIFF_LINES": "5"})
 check("6/18 a deleted file inside the sent diff is not named; one past the cut is",
-      reasons(cov) == {"gone2.py": "deleted, and past the diff cut"}, cov)
+      reasons(cov) == {"gone2.py": "not in the checkout, and past the diff cut"}, cov)
 
 c, b, cov, code = run_steps({"min.py": "x" * 3_000_000, "a.py": lines(5)}, ["min.py", "a.py"], "")
 check("19 a 3 MB single-line file is left out by the byte cap; the next file is sent",
@@ -157,9 +166,42 @@ c, b, cov, code = run_steps({"t\tab.py": lines(1), "q\"uote.py": lines(4000)}, [
 check("20 names with a tab or quote stay one record each",
       sent(code, "t\tab.py") and reasons(cov) == {"q\"uote.py": "over 3000 lines"}, cov)
 
-c, b, cov, code = run_steps({"a.py": lines(1), "big.py": lines(10)}, ["a.py", "big.py"], "",
-                            env={"MAX_PER_FILE": "5", "MAX_FILES": "7"})
-check("10 caller overrides are used", reasons(cov) == {"big.py": "over 5 lines"}, cov)
+c, b, cov, code = run_steps({"a.py": lines(1), "big.py": lines(10), "c.py": lines(1), "d.py": lines(4), "e.py": lines(1)},
+                            ["a.py", "big.py", "c.py", "d.py", "e.py"], "",
+                            env={"MAX_PER_FILE": "5", "MAX_FILES": "2", "MAX_TOTAL_LINES": "100"})
+check("10 caller overrides of max_per_file and max_files are used",
+      reasons(cov) == {"big.py": "over 5 lines", "d.py": "over the 2-file limit", "e.py": "over the 2-file limit"}, cov)
+c, b, cov, code = run_steps({"a.py": lines(3), "b.py": lines(3)}, ["a.py", "b.py"], "", env={"MAX_TOTAL_LINES": "5"})
+check("10 a max_total_lines override is used", reasons(cov) == {"b.py": "over the 5-line total"}, cov)
+c, b, cov, code = run_steps({"a.py": "a" * 50, "b.py": "b" * 60}, ["a.py", "b.py"], "", env={"MAX_PAYLOAD_BYTES": "100"})
+check("10 a max_payload_bytes override is used", reasons(cov) == {"b.py": "over the 100-byte total"}, cov)
+
+print("hostile file names and links")
+c, b, cov, code = run_steps({"-": "dash\n", "after.py": lines(1)}, ["-", "after.py"], "")
+check("22 a file named - is read as a file, and the files after it are still sent",
+      b.returncode == 0 and "--- - ---\ndash" in code and sent(code, "after.py"), (b.stderr[-300:], code[:300]))
+c, b, cov, code = run_steps({"-n.py": "x\n", "after.py": lines(1)}, ["-n.py", "after.py"], "")
+check("22 a file named -n.py does not kill the step", b.returncode == 0 and sent(code, "-n.py"), b.stderr[-300:])
+c, b, cov, code = run_steps({".git/config": "extraheader = AUTHORIZATION: basic SECRETTOKEN\n",
+                             "leak.py": Link(".git/config"), "out.py": Link("/etc/hosts"), "a.py": lines(1)},
+                            ["leak.py", "out.py", "a.py"], "")
+check("23 symlinks are not followed: no link target reaches the payload",
+      "SECRETTOKEN" not in code and not sent(code, "leak.py") and not sent(code, "out.py") and sent(code, "a.py")
+      and reasons(cov) == {"leak.py": "a symlink, not read", "out.py": "a symlink, not read"}, (cov, code[:300]))
+
+print("diff byte cap")
+c, b, cov, code = run_steps({"a.py": lines(1)}, ["a.py"], "diff --git a/a.py b/a.py\n+" + "y" * 200, env={"MAX_PAYLOAD_BYTES": "100"})
+check("24 a diff cut inside its last line is recorded as cut", cov.get("diff_cut") is True, cov)
+c, b, cov, code = run_steps({"a.py": lines(1)}, ["a.py"], "+" + "é" * 100, env={"MAX_PAYLOAD_BYTES": "50"})
+sent_diff = pathlib.Path("/tmp/review-diff.txt").read_bytes() if pathlib.Path("/tmp/review-diff.txt").exists() else b""
+try:
+    sent_diff.decode("utf-8")
+    valid = True
+except UnicodeDecodeError:
+    valid = False
+check("25 a byte cut through a two-byte character leaves valid UTF-8", valid and sent_diff, sent_diff[-8:])
+c, b, cov, code = run_steps({"a.py": lines(1)}, ["a.py"], "+short\n")
+check("24 an uncut diff is not recorded as cut", cov.get("diff_cut") is False, cov)
 
 print("filtering")
 c, b, cov, code = run_steps({}, ["pnpm-lock.yaml", "logo.png"], "")
