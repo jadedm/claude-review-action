@@ -283,6 +283,54 @@ for bad in ["0", "-1", "1.5", "6", "x"]:
           b.returncode != 0 and "max_chunks must be a whole number" in b.stdout + b.stderr and not CHUNKS.exists(),
           (b.returncode, b.stderr[-200:]))
 
+print("round 1 review fixes (#30)")
+c, b, cov, code = run_steps({"big.py": lines(50), "a.py": lines(1)}, ["big.py", "a.py"], hunk("big.py", 2) + hunk("a.py"),
+                            env={"MAX_PER_FILE": "3"})
+check("30.27 a file over max_per_file still has its diff sent, and says so",
+      hunk("big.py", 2) in "".join(read_chunks("diff.txt"))
+      and reasons(cov) == {"big.py": "over 3 lines, only its diff was sent"}, (cov, read_chunks("diff.txt")))
+c, b, cov, code = run_steps({"big.py": lines(50)}, ["big.py"], "", env={"MAX_PER_FILE": "3"})
+check("30.28 every file skipped and no diff: zero calls, step exits 0, coverage written",
+      b.returncode == 0 and read_chunks("files.json") == [] and reasons(cov) == {"big.py": "over 3 lines"}, (b.returncode, b.stderr[-300:], cov))
+
+
+def real_git_diff(files_before, files_after):
+    """A diff written by git itself, so quoting is git's, not ours."""
+    repo = pathlib.Path(tempfile.mkdtemp())
+    git = ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(git[:3] + ["init", "-q"], check=True)
+    for name, content in files_before.items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(content)
+    subprocess.run(git + ["add", "-A"], check=True)
+    subprocess.run(git + ["commit", "-qm", "base"], check=True)
+    for name in files_before:
+        (repo / name).unlink()
+    for name, content in files_after.items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(content)
+    subprocess.run(git + ["add", "-A"], check=True)
+    out = subprocess.run(git + ["diff", "--cached", "-M"], check=True, capture_output=True).stdout
+    shutil.rmtree(repo)
+    return out.decode("utf-8")
+
+
+odd = {"q\"uote.py": "a\n", "ünï.py": "b\n", "a b/c.py": "c\n", "gone \"x\".py": "d\n", "old name.py": "same\n" * 20}
+after = {"q\"uote.py": "a2\n", "ünï.py": "b2\n", "a b/c.py": "c2\n", "new name.py": "same\n" * 20 + "more\n"}
+diff = real_git_diff(odd, after)
+present = {n: v for n, v in after.items()}
+changed = ["q\"uote.py", "ünï.py", "a b/c.py", "gone \"x\".py", "new name.py"]
+c, b, cov, code = run_steps(present, changed, diff, env={"MAX_CHUNKS": "5", "MAX_FILES": "1"})
+pairs = {}
+for f, d in zip(read_chunks("files.json"), read_chunks("diff.txt")):
+    for name in json.loads(f):
+        pairs[name] = d
+check("30.29 git-quoted, spaced, Unicode, deleted and renamed paths each get their own real hunk",
+      set(pairs) == set(changed)
+      and all(mark in pairs[n] for n, mark in [("q\"uote.py", "+a2"), ("ünï.py", "+b2"), ("a b/c.py", "+c2"),
+                                                ("gone \"x\".py", "-d"), ("new name.py", "+more")])
+      and cov["omitted"] == [] and cov["diff_sent"] == cov["diff_total"] > 0, (sorted(pairs), cov, diff[:300]))
+
 for name in TMP_FILES:
     pathlib.Path("/tmp", name).unlink(missing_ok=True)
 shutil.rmtree(CHUNKS, ignore_errors=True)

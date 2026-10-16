@@ -98,6 +98,8 @@ def run_calls(chunk_names):
     (bin_dir / "curl").chmod(0o755)
     state = work / "_state"
     state.mkdir()
+    if chunk_names is None:
+        chunk_names = []  # the planner made no calls and wrote no chunk directory
     for n, names in enumerate(chunk_names, 1):
         d = CHUNKS / str(n)
         d.mkdir(parents=True)
@@ -147,6 +149,10 @@ check("30.22 a 429 then success, a timeout and a 500 in one run: the first posts
 proc, review, cov, secs = run_calls([["unreadable.py"], ["plain.py"]])
 check("30.11 an unreadable reply beside a good one: posts, the unreadable call's files listed",
       proc.returncode == 0 and reasons(cov) == {"unreadable.py": "reply unreadable"}, cov)
+
+proc, review, cov, secs = run_calls(None)
+check("30.28 no planned calls: the step exits 0 and writes a nothing-sent review",
+      proc.returncode == 0 and review == {"nothing_sent": True}, (proc.returncode, proc.stdout[-300:], proc.stderr[-300:]))
 
 shutil.rmtree(CHUNKS, ignore_errors=True)
 for p in TMP:

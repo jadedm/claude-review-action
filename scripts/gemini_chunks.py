@@ -12,8 +12,10 @@ number of calls.
 
 Each changed file and its diff hunk travel together. Files are sorted by path
 so neighbours tend to share a call, and each goes into the first call with
-room for it (first fit). With MAX_CHUNKS=1 that is the single call and the
-skip-and-continue behaviour of #29, with the same reasons.
+room for it (first fit). With MAX_CHUNKS=1 that is #29's single call with
+skip-and-continue, except that the diff is now per file: hunks follow their
+files in path order, a skipped file's hunk is still sent (its listing says
+so), and lock, generated and binary files' hunks are not sent.
 
 A pull request controls its file names, contents and symlinks, so a symlink or
 a path resolving outside the checkout or into .git is never read.
@@ -42,24 +44,88 @@ def read_list(path):
     return [line.rstrip(b"\n").decode("utf-8", "surrogateescape") for line in lines_of(pathlib.Path(path).read_bytes())]
 
 
+_ESCAPES = {b"a": 7, b"b": 8, b"t": 9, b"n": 10, b"v": 11, b"f": 12, b"r": 13, b'"': 34, b"\\": 92}
+
+
+def unquote(raw):
+    """A path as git writes it: plain, or C-quoted when it holds a quote,
+    a control character or (with core.quotePath) a non-ASCII byte."""
+    if not raw.startswith(b'"'):
+        return raw
+    out, i = bytearray(), 1
+    while i < len(raw) and raw[i:i + 1] != b'"':
+        if raw[i:i + 1] != b"\\":
+            out += raw[i:i + 1]
+            i += 1
+            continue
+        nxt = raw[i + 1:i + 2]
+        if nxt.isdigit():
+            out.append(int(raw[i + 1:i + 4], 8))
+            i += 4
+            continue
+        out.append(_ESCAPES.get(nxt, nxt[0] if nxt else 92))
+        i += 2
+    return bytes(out)
+
+
+def _field(line, prefix):
+    """The path on a `--- a/x` or `+++ b/x` line, without its a/ or b/."""
+    raw = line[4:].rstrip(b"\n")
+    raw = raw[:-1] if raw.endswith(b"\t") else raw  # git adds a tab after a name with a space
+    path = unquote(raw)
+    return path[2:] if path.startswith(prefix) else None
+
+
+def hunk_path(hunk):
+    """The file a hunk belongs to: its new name, or its old one when deleted.
+
+    Read from the header lines before the first @@, where `--- ` and `+++ `
+    are file names rather than content. A hunk with neither (a rename with no
+    change, a mode change, a binary file) falls back to `rename to` and then
+    to the `diff --git` line, whose two halves are equal when unquoted.
+    """
+    lines = lines_of(hunk)
+    header = []
+    for line in lines[1:]:
+        if line.startswith(b"@@"):
+            break
+        header.append(line)
+    plus = [_field(l, b"b/") for l in header if l.startswith(b"+++ ") and not l.startswith(b"+++ /dev/null")]
+    minus = [_field(l, b"a/") for l in header if l.startswith(b"--- ") and not l.startswith(b"--- /dev/null")]
+    renamed = [unquote(l[len(b"rename to "):].rstrip(b"\n")) for l in header if l.startswith(b"rename to ")]
+    for found in (plus, renamed, minus):
+        if found and found[0] is not None:
+            return found[0].decode("utf-8", "surrogateescape")
+    rest = lines[0][len(b"diff --git "):].rstrip(b"\n")
+    if rest.startswith(b'"') or b' "b/' in rest:
+        tail = rest[rest.rindex(b' "b/') + 1:] if b' "b/' in rest else rest.split(b" ", 1)[-1]
+        path = unquote(tail)
+    else:
+        half = (len(rest) - 1) // 2
+        a_side, b_side = rest[:half], rest[half + 1:]
+        same = a_side.startswith(b"a/") and b_side.startswith(b"b/") and a_side[2:] == b_side[2:]
+        path = b_side if same else b"b/" + rest.split(b" b/", 1)[-1]
+    return (path[2:] if path.startswith(b"b/") else path).decode("utf-8", "surrogateescape")
+
+
 def split_hunks(diff):
     """{path: hunk bytes}, plus the text before the first header under None.
 
     A hunk starts at a line beginning `diff --git `. Content lines in a diff
-    start with +, - or a space, so they cannot start a hunk. The path is the
-    b/ side, which is the name the files API gives a renamed file.
+    start with +, - or a space, so they cannot start a hunk.
     """
-    hunks, key, current = {}, None, []
+    chunks, current = [], []
     for line in lines_of(diff):
-        if line.startswith(b"diff --git "):
-            hunks[key] = hunks.get(key, b"") + b"".join(current)
+        if line.startswith(b"diff --git ") and current:
+            chunks.append(b"".join(current))
             current = []
-            text = line.decode("utf-8", "surrogateescape").rstrip("\n")
-            key = text.split(" b/", 1)[1] if " b/" in text else text
         current.append(line)
-    hunks[key] = hunks.get(key, b"") + b"".join(current)
-    if not hunks[None]:
-        del hunks[None]
+    if current:
+        chunks.append(b"".join(current))
+    hunks = {}
+    for chunk in chunks:
+        key = hunk_path(chunk) if chunk.startswith(b"diff --git ") else None
+        hunks[key] = hunks.get(key, b"") + chunk
     return hunks
 
 
@@ -178,11 +244,19 @@ def plan(caps):
         chunks[0].add("", None, hunks[None])
         chunks[0].files.pop()  # the text before the first header is no one's file
 
+    def diff_only(name, hunk, why):
+        """A file whose source is not read still has its diff reviewed, as a
+        single call always sent the whole diff. Listed either way."""
+        if hunk and place(name, None, hunk) is None:
+            omitted.append({"file": name, "reason": f"{why}, only its diff was sent"})
+            return
+        omitted.append({"file": name, "reason": why})
+
     for name in changed:
         hunk = hunks.get(name, b"")
         reason = readable(name)
         if reason:
-            omitted.append({"file": name, "reason": reason})
+            diff_only(name, hunk, reason)
             continue
         if not os.path.isfile(name):
             # Deleted, or added on an @gemini run that checked out the default branch (#16).
@@ -193,7 +267,7 @@ def plan(caps):
             continue
         code = pathlib.Path(name).read_bytes()
         if len(lines_of(code)) > caps["per_file"]:
-            omitted.append({"file": name, "reason": f"over {caps['per_file']} lines"})
+            diff_only(name, hunk, f"over {caps['per_file']} lines")
             continue
         reason = place(name, code, hunk)
         if reason:

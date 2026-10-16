@@ -33,8 +33,11 @@ def load_calls(chunks_dir):
         status_file = d / "status"
         status = status_file.read_text().strip() if status_file.exists() else "failed"
         review = json.loads((d / "review.json").read_text()) if status == "ok" else None
+        if review is not None:
+            review.pop("parts", None)  # parts are ours to build; a reply's own would replace the summary
+        diff = d / "diff.txt"
         calls.append({"n": int(d.name), "status": status, "files": json.loads((d / "files.json").read_text()),
-                      "review": review})
+                      "review": review, "diff_lines": len(diff.read_bytes().splitlines()) if diff.exists() else 0})
     return calls
 
 
@@ -82,15 +85,22 @@ def merge(calls):
 
 
 def main(chunks_dir, review_out, coverage_path):
+    if not pathlib.Path(chunks_dir).is_dir():
+        # Every changed file was skipped and there was no diff to send: say so
+        # rather than fail, so the comment still lists what was skipped.
+        print("No review calls were planned: nothing fit the caps")
+        pathlib.Path(review_out).write_text(json.dumps({"nothing_sent": True}))
+        return 0
     calls = load_calls(chunks_dir)
-    if not calls:
-        print("ERROR: no review calls were planned")
-        return 1
     coverage_file = pathlib.Path(coverage_path)
     coverage = json.loads(coverage_file.read_text()) if coverage_file.exists() else {"omitted": []}
     for call in calls:
-        if call["status"] in REASON:
-            coverage["omitted"] += [{"file": f, "reason": REASON[call["status"]]} for f in call["files"]]
+        if call["status"] not in REASON:
+            continue
+        coverage["omitted"] += [{"file": f, "reason": REASON[call["status"]]} for f in call["files"]]
+        coverage["diff_sent"] = max(int(coverage.get("diff_sent") or 0) - call["diff_lines"], 0)
+        coverage["diff_cut"] = True
+        print(f"::warning::Gemini call {call['n']} {call['status']}; its {len(call['files'])} files are listed as not reviewed")
     coverage_file.write_text(json.dumps(coverage))
 
     ok = [c for c in calls if c["status"] == "ok"]

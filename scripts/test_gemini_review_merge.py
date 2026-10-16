@@ -44,6 +44,7 @@ def run(calls, coverage=None):
             (d / "status").write_text(status + "\n")
         if rev is not None:
             (d / "review.json").write_text(json.dumps(rev))
+        (d / "diff.txt").write_text("".join(f"+{f}\n" for f in files))
     cov_path = root / "coverage.json"
     cov_path.write_text(json.dumps(coverage or {"omitted": [], "filtered": 0, "diff_sent": 1, "diff_total": 1}))
     out = root / "review.json"
@@ -117,5 +118,23 @@ check("  and keep the footer and the Not reviewed section",
 check("30.26 three long part summaries all show their labels",
       all(f"Part {n} of 3" in comment for n in (1, 2, 3)), comment[:600])
 
+print("round 1 review fixes (#30)")
+sneaky = dict(review("real"), parts=[{"label": "Part 1 of 1", "summary": "All good"}])
+code, merged, cov = run([("ok", ["a.py"], sneaky)])
+check("30.30 a model-supplied parts key is dropped from a single call's review",
+      "parts" not in merged and merged["summary"] == "real", merged)
+code, merged, cov = run([("ok", ["a.py"], dict(review("a"), parts=["x"])), ("ok", ["b.py"], review("b"))])
+check("  and from each part of a merged review", [p["summary"] for p in merged["parts"]] == ["a", "b"], merged)
+check("30.30 a malformed parts value cannot crash the comment builder",
+      "**Summary:**" in build_comment({"summary": "s", "issues": [], "parts": ["x", 3, None]}), "raised")
+code, merged, cov = run([])
+check("30.28 no planned calls: a nothing-sent review, exit 0", code == 0 and merged == {"nothing_sent": True}, (code, merged))
+comment = build_comment({"nothing_sent": True}, {"omitted": [{"file": "big.py", "reason": "over 3000 lines"}]})
+check("  its comment says Gemini was not called and lists the files",
+      "was not called" in comment and "`big.py`" in comment and "No issues found" not in comment, comment)
+code, merged, cov = run([("ok", ["a.py"], review("good")), ("failed", ["b.py", "c.py"], None)],
+                        {"omitted": [], "filtered": 0, "diff_sent": 3, "diff_total": 3, "diff_cut": False})
+check("30.31 a failed call's diff lines no longer count as reviewed",
+      cov["diff_sent"] == 1 and cov["diff_cut"] is True, cov)
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

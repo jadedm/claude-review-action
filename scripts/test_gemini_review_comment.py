@@ -110,7 +110,7 @@ cov = {"omitted": [{"file": "big.py", "reason": "over 3000 lines"}], "filtered":
 comment = build_comment(small, cov)
 check("29.2 a left-out file, the filtered count and a cut diff are all said", all(s in comment for s in [
     "### Not reviewed", "- `big.py` (over 3000 lines)", "2 lock, generated or binary files",
-    "first 5,000 of 7,000 lines"]), comment)
+    "5,000 of the diff's 7,000 lines were reviewed"]), comment)
 check("  the section sits above the footer",
       0 <= comment.find("### Not reviewed") < comment.find("*Reviewed by Gemini*"), comment)
 hostile = {"omitted": [{"file": n, "reason": "@r [x](https://e.x)"} for n in

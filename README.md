@@ -143,12 +143,12 @@ All Claude inputs above, plus:
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `model` | string | `gemini-4-argon` | Gemini model ID. Set `gemini-3.8-flash` for a faster, cheaper review |
-| `max_total_lines` | number | `20000` | Cap on total source lines sent to Gemini |
+| `max_total_lines` | number | `20000` | Source lines per Gemini call |
 | `max_per_file` | number | `3000` | Skip files larger than this |
-| `max_files` | number | `50` | Cap on file count |
-| `max_diff_lines` | number | `5000` | Cap on diff lines sent to Gemini |
-| `max_payload_bytes` | number | `2000000` | Cap on diff plus source bytes, for files with very long lines |
-| `max_chunks` | number | `3` | A pull request over the caps is split into up to this many parallel calls (1 to 5), each within the caps; findings merge into one comment |
+| `max_files` | number | `50` | Files per Gemini call |
+| `max_diff_lines` | number | `5000` | Diff lines per Gemini call |
+| `max_payload_bytes` | number | `2000000` | Diff plus source bytes per Gemini call, for files with very long lines |
+| `max_chunks` | number | `3` | A pull request over the per-call caps is split into up to this many parallel calls (1 to 5); findings merge into one comment. Each call is billed, so a large pull request can cost up to this many times a single review. Set `1` for one call |
 
 ## Secrets required
 

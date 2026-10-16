@@ -32,11 +32,11 @@ on:
         type: number
         default: 50
       max_diff_lines:
-        description: 'Max lines of the pull request diff included in review payload'
+        description: 'Max diff lines per Gemini call'
         type: number
         default: 5000
       max_payload_bytes:
-        description: 'Max bytes of diff plus source in review payload. Line caps miss a file with very long lines'
+        description: 'Max bytes of diff plus source per Gemini call. Line caps miss a file with very long lines'
         type: number
         default: 2000000
       max_chunks:
@@ -330,6 +330,9 @@ jobs:
             echo failed > "$dir/status"
           }
 
+          # No match (zero planned calls) leaves both loops empty rather than
+          # running them once on the literal pattern.
+          shopt -s nullglob
           for dir in /tmp/review-chunks/*/; do
             call_chunk "${dir%/}" > "${dir%/}/log" 2>&1 &
           done
@@ -358,6 +361,12 @@ jobs:
           # and keeps the comment under GitHub's size limit.
           COMMENT=$(python3 .claude-review-action/scripts/gemini_review_comment.py /tmp/gemini-review.json /tmp/review-coverage.json)
           gh pr comment ${{ github.event.pull_request.number || github.event.issue.number }} --body "$COMMENT"
+
+          if python3 -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('nothing_sent') else 1)"; then
+            echo "assessment=not_reviewed" >> "$GITHUB_OUTPUT"
+            echo "issue_count=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           if python3 -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('unparsed') else 1)"; then
             echo "assessment=unparsed" >> "$GITHUB_OUTPUT"
