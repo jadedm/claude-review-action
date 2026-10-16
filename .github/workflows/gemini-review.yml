@@ -18,7 +18,7 @@ on:
       model:
         description: 'Gemini model name'
         type: string
-        default: 'gemini-2.5-flash'
+        default: 'gemini-4-argon'
       max_total_lines:
         description: 'Max total source lines included in review payload'
         type: number
@@ -265,25 +265,38 @@ jobs:
           API_URL="https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent"
           RESULT_FILE=/tmp/gemini-result.json
 
+          # Thinking models spend output tokens on thinking, and they count
+          # against maxOutputTokens. A full payload (about 5,000 lines) took
+          # 110 s and 15,420 output tokens on gemini-3.1-pro-preview, and 22 to
+          # 31 s on gemini-4-argon (#27); the old 16384 / 120 s limits left
+          # no room.
           HTTP_CODE=""
           for attempt in 1 2 3; do
+            CURL_RC=0
             HTTP_CODE=$(curl -s -w "%{http_code}" -o "$RESULT_FILE" \
               "$API_URL" \
               -H 'Content-Type: application/json' \
               -H "X-goog-api-key: ${GEMINI_API_KEY}" \
-              --max-time 120 \
+              --max-time 300 \
               -X POST \
               -d @- <<CURL_EOF
           {
             "contents": [{"parts": [{"text": ${PROMPT_ESCAPED}}]}],
             "generationConfig": {
-              "maxOutputTokens": 16384,
+              "maxOutputTokens": 65536,
               "temperature": 1.0,
               "responseMimeType": "application/json"
             }
           }
           CURL_EOF
-            )
+            ) || CURL_RC=$?
+
+            # Without this, set -e ended the step on a curl failure with no
+            # message at all.
+            if [ "$CURL_RC" -ne 0 ]; then
+              echo "Gemini API request failed (curl exit ${CURL_RC}; 28 means no reply within 300 s)"
+              exit 1
+            fi
 
             if [ "$HTTP_CODE" = "200" ]; then
               break
