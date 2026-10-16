@@ -200,6 +200,7 @@ try:
 except UnicodeDecodeError:
     valid = False
 check("25 a byte cut through a two-byte character leaves valid UTF-8", valid and sent_diff, sent_diff[-8:])
+check("25 and stays within the byte cap", 0 < len(sent_diff) <= 50, len(sent_diff))
 c, b, cov, code = run_steps({"a.py": lines(1)}, ["a.py"], "+short\n")
 check("24 an uncut diff is not recorded as cut", cov.get("diff_cut") is False, cov)
 

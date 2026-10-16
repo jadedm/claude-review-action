@@ -212,7 +212,7 @@ jobs:
           data = open("/tmp/pr-diff.txt", "rb").read()
           clipped = b"".join(io.BytesIO(data).readlines()[:max_lines])[:max_bytes]
           with open("/tmp/pr-diff-sent.txt", "wb") as f:
-              f.write(clipped.decode("utf-8", "replace").encode("utf-8"))
+              f.write(clipped.decode("utf-8", "ignore").encode("utf-8"))  # "replace" adds bytes past the cap
           print("true" if len(clipped) < len(data) else "false")
           PY
           )
