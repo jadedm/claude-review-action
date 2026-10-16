@@ -142,7 +142,7 @@ All Claude inputs above, plus:
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `model` | string | `gemini-3.1-pro-preview` | Gemini model ID. Set `gemini-3.8-flash` for a faster, cheaper review |
+| `model` | string | `gemini-4-argon` | Gemini model ID. Set `gemini-3.8-flash` for a faster, cheaper review |
 | `max_total_lines` | number | `5000` | Cap on total source lines sent to Gemini |
 | `max_per_file` | number | `1000` | Skip files larger than this |
 | `max_files` | number | `20` | Cap on file count |

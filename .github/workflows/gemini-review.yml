@@ -18,7 +18,7 @@ on:
       model:
         description: 'Gemini model name'
         type: string
-        default: 'gemini-3.1-pro-preview'
+        default: 'gemini-4-argon'
       max_total_lines:
         description: 'Max total source lines included in review payload'
         type: number
@@ -265,10 +265,11 @@ jobs:
           API_URL="https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent"
           RESULT_FILE=/tmp/gemini-result.json
 
-          # Pro spends output tokens on thinking, and they count against
-          # maxOutputTokens. A full payload (about 5,000 lines) took 110 s and
-          # 15,420 output tokens on gemini-3.1-pro-preview (#27); the old
-          # 16384 / 120 s limits left no room.
+          # Thinking models spend output tokens on thinking, and they count
+          # against maxOutputTokens. A full payload (about 5,000 lines) took
+          # 110 s and 15,420 output tokens on gemini-3.1-pro-preview, and 22 to
+          # 31 s on gemini-4-argon (#27); the old 16384 / 120 s limits left
+          # no room.
           HTTP_CODE=""
           for attempt in 1 2 3; do
             CURL_RC=0
