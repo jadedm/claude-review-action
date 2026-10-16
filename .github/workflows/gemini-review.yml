@@ -364,7 +364,7 @@ jobs:
 
           if python3 -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('nothing_sent') else 1)"; then
             echo "assessment=not_reviewed" >> "$GITHUB_OUTPUT"
-            echo "issue_count=0" >> "$GITHUB_OUTPUT"
+            echo "issue_count=n/a" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 

@@ -289,6 +289,11 @@ c, b, cov, code = run_steps({"big.py": lines(50), "a.py": lines(1)}, ["big.py", 
 check("30.27 a file over max_per_file still has its diff sent, and says so",
       hunk("big.py", 2) in "".join(read_chunks("diff.txt"))
       and reasons(cov) == {"big.py": "over 3 lines, only its diff was sent"}, (cov, read_chunks("diff.txt")))
+c, b, cov, code = run_steps({".git/config": "SECRETTOKEN\n", "leak.py": Link(".git/config"), "a.py": lines(1)},
+                            ["leak.py", "a.py"], hunk("leak.py") + hunk("a.py"))
+check("30.27 a symlink's diff is sent but its target is not read",
+      hunk("leak.py") in "".join(read_chunks("diff.txt")) and "SECRETTOKEN" not in code
+      and reasons(cov) == {"leak.py": "a symlink, not read, only its diff was sent"}, cov)
 c, b, cov, code = run_steps({"big.py": lines(50)}, ["big.py"], "", env={"MAX_PER_FILE": "3"})
 check("30.28 every file skipped and no diff: zero calls, step exits 0, coverage written",
       b.returncode == 0 and read_chunks("files.json") == [] and reasons(cov) == {"big.py": "over 3 lines"}, (b.returncode, b.stderr[-300:], cov))

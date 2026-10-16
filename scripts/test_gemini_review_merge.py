@@ -44,7 +44,7 @@ def run(calls, coverage=None):
             (d / "status").write_text(status + "\n")
         if rev is not None:
             (d / "review.json").write_text(json.dumps(rev))
-        (d / "diff.txt").write_text("".join(f"+{f}\n" for f in files))
+        (d / "diff.txt").write_text("".join(f"+{f}\r still one line\n" for f in files))
     cov_path = root / "coverage.json"
     cov_path.write_text(json.dumps(coverage or {"omitted": [], "filtered": 0, "diff_sent": 1, "diff_total": 1}))
     out = root / "review.json"

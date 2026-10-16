@@ -18,6 +18,7 @@ Each <chunks_dir>/<n>/ holds files.json (the files that call owned), status
 
 Standard library only.
 """
+import io
 import json
 import pathlib
 import sys
@@ -37,7 +38,7 @@ def load_calls(chunks_dir):
             review.pop("parts", None)  # parts are ours to build; a reply's own would replace the summary
         diff = d / "diff.txt"
         calls.append({"n": int(d.name), "status": status, "files": json.loads((d / "files.json").read_text()),
-                      "review": review, "diff_lines": len(diff.read_bytes().splitlines()) if diff.exists() else 0})
+                      "review": review, "diff_lines": len(io.BytesIO(diff.read_bytes()).readlines()) if diff.exists() else 0})
     return calls
 
 
