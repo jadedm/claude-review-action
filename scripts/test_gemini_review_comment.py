@@ -101,5 +101,41 @@ check("  every hostile field in a full review is inert",
           "positives": ["www.x.com @p"], "overall_assessment": "<script>"})).replace("\u200b", " ")),
       "a field reached the comment raw")
 
+print("what was not reviewed (#29)")
+small = {"summary": "s", "issues": []}
+full = {"omitted": [], "filtered": 0, "diff_sent": 10, "diff_total": 10}
+check("29.1 nothing left out adds no section",
+      build_comment(small, full) == build_comment(small) and "Not reviewed" not in build_comment(small, full))
+cov = {"omitted": [{"file": "big.py", "reason": "over 3000 lines"}], "filtered": 2, "diff_sent": 5000, "diff_total": 7000}
+comment = build_comment(small, cov)
+check("29.2 a left-out file, the filtered count and a cut diff are all said", all(s in comment for s in [
+    "### Not reviewed", "- `big.py` (over 3000 lines)", "2 lock, generated or binary files",
+    "first 5,000 of 7,000 lines"]), comment)
+check("  the section sits above the footer",
+      0 <= comment.find("### Not reviewed") < comment.find("*Reviewed by Gemini*"), comment)
+hostile = {"omitted": [{"file": n, "reason": "@r [x](https://e.x)"} for n in
+           ["@team", "[x](http://e.x)", "a`b`c", "<img src=x>", "tab\there"]]}
+comment = build_comment(small, hostile)
+check("29.7 hostile file names and reasons are inert",
+      not re.search(r"@[a-z]|https?://|<[a-z]|\]\(", outside_code(comment).replace("​", " ")), comment)
+check("29.20 a file name with a tab stays one entry", comment.count("- `tab") == 1, comment)
+many_omitted = {"omitted": [{"file": f"f{i}.py", "reason": "over the 50-file limit"} for i in range(500)]}
+comment = build_comment(small, many_omitted)
+check("29.8 500 left-out files: 50 named and the rest counted",
+      comment.count("over the 50-file limit") == 50 and "- and 450 more" in comment, comment[-400:])
+comment = build_comment({"unparsed": True}, cov)
+check("29.9 the unreadable notice keeps the section",
+      comment.startswith(UNPARSED.split("---")[0]) and "### Not reviewed" in comment
+      and comment.endswith("*Reviewed by Gemini*"), comment)
+long_names = {"omitted": [{"file": "d/" * 140 + f"{i}.py", "reason": "over 3000 lines"} for i in range(500)]}
+worst = max(len(build_comment({"summary": "s", "issues": [
+    {"severity": "low", "file": "f", "line": 1, "category": "c", "description": "d" * n}] * 200}, long_names))
+    for n in range(1500, 2000, 37))
+check("29.21 a near-full review plus 500 long left-out names stays under the limit", worst <= COMMENT_LIMIT, worst)
+check("  and keeps the section", "### Not reviewed" in build_comment(many, long_names))
+
+comment = build_comment(small, {"omitted": [], "diff_sent": 1, "diff_total": 1, "diff_cut": True})
+check("29.24 a cut inside the last line is said", "cut at the byte limit" in comment and "first 1 of 1" not in comment, comment)
+
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

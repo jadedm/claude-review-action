@@ -85,9 +85,47 @@ UNPARSED = "\n".join([
 ])
 
 
-def build_comment(review):
+NAMED_LIMIT = 50  # left-out files named one by one; the rest are counted
+
+
+def coverage_section(coverage):
+    """What the review did not see (#29), or [] when it saw everything.
+
+    `coverage` comes from the payload builder: `omitted` is a list of
+    {file, reason}, `filtered` counts lock, generated and binary files, and
+    `diff_sent` / `diff_total` are line counts. File names come from the pull
+    request, so they are rendered like every other untrusted field.
+    """
+    if not coverage:
+        return []
+    omitted = coverage.get("omitted") or []
+    filtered = int(coverage.get("filtered") or 0)
+    diff_sent = int(coverage.get("diff_sent") or 0)
+    diff_total = int(coverage.get("diff_total") or 0)
+    diff_cut = bool(coverage.get("diff_cut", diff_sent < diff_total))
+    if not (omitted or filtered or diff_cut):
+        return []
+
+    lines = ["### Not reviewed", ""]
+    if omitted:
+        lines += ["Gemini did not see these changed files:", ""]
+        lines += [f"- {code(o.get('file', '?'))} ({inert(o.get('reason', ''), 80)})" for o in omitted[:NAMED_LIMIT]]
+        if len(omitted) > NAMED_LIMIT:
+            lines.append(f"- and {len(omitted) - NAMED_LIMIT} more")
+        lines.append("")
+    if filtered:
+        lines += [f"{filtered} lock, generated or binary files were skipped by design.", ""]
+    if diff_cut and diff_sent < diff_total:
+        lines += [f"The diff was cut to its first {diff_sent:,} of {diff_total:,} lines.", ""]
+    if diff_cut and diff_sent >= diff_total:
+        lines += ["The diff was cut at the byte limit, inside its last line.", ""]
+    return lines
+
+
+def build_comment(review, coverage=None):
+    section = coverage_section(coverage)
     if review.get("unparsed"):
-        return UNPARSED
+        return UNPARSED if not section else UNPARSED.replace("\n".join(_FOOTER), "\n".join(section + _FOOTER))
 
     lines = ["### Gemini Code Review", ""]
     lines += [f"**Summary:** {inert(review.get('summary', '(no summary)'))}", ""]
@@ -118,7 +156,7 @@ def build_comment(review):
 
     assessment = str(review.get("overall_assessment", "comment"))
     icon = ASSESSMENT_ICONS.get(assessment, "💬")
-    tail = [f"**Overall: {icon} {inert(assessment.replace('_', ' ').title(), 40)}**", "", *_FOOTER]
+    tail = [f"**Overall: {icon} {inert(assessment.replace('_', ' ').title(), 40)}**", "", *section, *_FOOTER]
 
     # Add whole blocks while they fit, so a cut never lands inside one. The
     # cut notice is counted up front so adding it cannot pass the limit.
@@ -138,4 +176,9 @@ def build_comment(review):
 
 if __name__ == "__main__":
     with open(sys.argv[1]) as f:
-        print(build_comment(json.load(f)))
+        review = json.load(f)
+    coverage = None
+    if len(sys.argv) > 2:
+        with open(sys.argv[2]) as f:
+            coverage = json.load(f)
+    print(build_comment(review, coverage))
