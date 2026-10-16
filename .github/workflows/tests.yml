@@ -20,3 +20,7 @@ jobs:
         run: python3 scripts/test_gemini_review_comment.py
       - name: Gemini payload caps (#29)
         run: python3 scripts/test_gemini_payload.py
+      - name: Gemini review merge (#30)
+        run: python3 scripts/test_gemini_review_merge.py
+      - name: Gemini parallel calls (#30)
+        run: python3 scripts/test_gemini_calls.py

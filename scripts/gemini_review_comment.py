@@ -116,19 +116,32 @@ def coverage_section(coverage):
     if filtered:
         lines += [f"{filtered} lock, generated or binary files were skipped by design.", ""]
     if diff_cut and diff_sent < diff_total:
-        lines += [f"The diff was cut to its first {diff_sent:,} of {diff_total:,} lines.", ""]
+        lines += [f"{diff_sent:,} of the diff's {diff_total:,} lines were reviewed.", ""]
     if diff_cut and diff_sent >= diff_total:
         lines += ["The diff was cut at the byte limit, inside its last line.", ""]
     return lines
 
 
+NOTHING_SENT = ("Gemini was not called: no changed file, and none of the diff, fit the review limits. "
+                "The files are listed below.")
+
+
 def build_comment(review, coverage=None):
     section = coverage_section(coverage)
+    if review.get("nothing_sent"):
+        return "\n".join(["### Gemini Code Review", "", NOTHING_SENT, "", *section, *_FOOTER])
     if review.get("unparsed"):
         return UNPARSED if not section else UNPARSED.replace("\n".join(_FOOTER), "\n".join(section + _FOOTER))
 
     lines = ["### Gemini Code Review", ""]
-    lines += [f"**Summary:** {inert(review.get('summary', '(no summary)'))}", ""]
+    parts = [p for p in review.get("parts") or [] if isinstance(p, dict)] if isinstance(review.get("parts"), list) else []
+    if parts:
+        # A pull request split into several calls (#30): one line per call, each
+        # capped on its own so a long first part cannot hide the others.
+        lines += ["**Summary:**", ""] + [f"- **{inert(p.get('label', ''), 40)}:** {inert(p.get('summary', ''))}"
+                                         for p in parts] + [""]
+    else:
+        lines += [f"**Summary:** {inert(review.get('summary', '(no summary)'))}", ""]
 
     issues = review.get("issues") or []
     body = []
