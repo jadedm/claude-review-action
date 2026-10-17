@@ -28,6 +28,8 @@ import os
 import pathlib
 import sys
 
+from safe_path import readable  # one rule for every read from the checkout (#35)
+
 MAX_CHUNKS_LIMIT = 5
 CHANGED = "/tmp/changed-files.txt"
 ALL_CHANGED = "/tmp/all-changed-files.txt"
@@ -133,16 +135,6 @@ def clip(data, max_lines, max_bytes):
     """data cut to whole lines and bytes, never splitting a UTF-8 character."""
     kept = b"".join(lines_of(data)[:max(max_lines, 0)])[:max(max_bytes, 0)]
     return kept.decode("utf-8", "ignore").encode("utf-8")
-
-
-def readable(path):
-    """Why a changed path must not be read, or None when it may be."""
-    if os.path.islink(path):
-        return "a symlink, not read"
-    root = os.path.realpath(".")
-    real = os.path.realpath(path)
-    inside = real.startswith(root + os.sep) and not real.startswith(os.path.join(root, ".git") + os.sep)
-    return None if inside else "outside the checkout, not read"
 
 
 class Chunk:

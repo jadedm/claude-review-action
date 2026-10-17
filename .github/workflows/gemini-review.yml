@@ -224,15 +224,17 @@ jobs:
             # consumer repo + the optional inline string. Either or both
             # are appended under a single "Repo-specific notes" heading;
             # file contents render first, inline string second.
+            # The same rule as the changed files: a link could point at a runner file (#35).
             EXTRAS_RENDERED=0
-            if [ -n "$EXTRA_PROMPT_PATH" ] && [ -f "$EXTRA_PROMPT_PATH" ]; then
+            skip=""
+            if [ -n "$EXTRA_PROMPT_PATH" ] && skip=$(python3 "$ROOT/scripts/safe_path.py" "$EXTRA_PROMPT_PATH"); then
               echo ""
               echo "## Repo-specific notes"
               echo ""
-              cat "$EXTRA_PROMPT_PATH"
+              cat < "$EXTRA_PROMPT_PATH"
               EXTRAS_RENDERED=1
             elif [ -n "$EXTRA_PROMPT_PATH" ]; then
-              echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' not found in consumer repo — skipping" >&2
+              echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' skipped: ${skip}" >&2
             fi
             if [ -n "$EXTRA_PROMPT" ]; then
               if [ "$EXTRAS_RENDERED" -eq 0 ]; then
