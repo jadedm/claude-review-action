@@ -117,13 +117,16 @@ jobs:
       - name: Checkout review action repo (prompts)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: jadedm/claude-review-action
-          # This workflow's own commit unless the caller names a ref (#25).
-          # job.workflow_sha is empty on GitHub Enterprise Server; v1 is the
-          # old default, not this repo's default branch.
+          # This workflow's own repository and commit unless the caller names a
+          # ref (#25), so a fork's workflow loads the fork's prompts. job.workflow_*
+          # is empty on GitHub Enterprise Server; v1 here is the old default, not
+          # this repo's default branch.
+          repository: ${{ job.workflow_repository || 'jadedm/claude-review-action' }}
           ref: ${{ inputs.ref || job.workflow_sha || 'v1' }}
           path: .claude-review-action
           token: ${{ github.token }}
+          # Nothing later needs git credentials in this checkout either (#25 review).
+          persist-credentials: false
 
       - name: Install GitHub CLI
         run: |

@@ -137,7 +137,7 @@ Example `.github/review-extras.md` in a consumer repo:
 |---|---|---|---|
 | `stack` | string | (required) | Prompt template name in `prompts/<stack>.md` |
 | `runner` | string (JSON) | `"ubuntu-latest"` | `runs-on` value, JSON-encoded |
-| `ref` | string | `''` | Ref of this repo to load prompts, scripts and the Slack action from. Empty means the commit of the workflow being run, so `@v1.2.3` or `@<sha>` also fixes the prompts and scripts. Set it only to load them from somewhere else |
+| `ref` | string | `''` | Ref of this repo to load prompts, scripts and the Slack action from. Empty means the commit of the workflow being run, so `@v1.2.3` or `@<sha>` also fixes the prompts and scripts (on GitHub Enterprise Server, which lacks that context, empty means `v1`). Set it only to load them from somewhere else |
 | `slack_notify` | boolean | `false` | Post a Slack message on completion |
 | `extra_prompt` | string | `''` | Inline repo-specific addendum |
 | `extra_prompt_path` | string | `''` | Path (in consumer repo) to a markdown file appended after the stack prompt. Symlinks and paths outside the checkout or in `.git` are skipped |
