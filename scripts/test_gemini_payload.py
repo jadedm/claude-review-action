@@ -92,7 +92,7 @@ def run_steps(files, changed, diff, env=None, gh_fails=False):
     pathlib.Path("/tmp/pr-diff.txt").write_text(diff)
     out = work / "_out"
     base_env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GITHUB_OUTPUT=str(out),
-                    GH_TOKEN="x", PR_NUMBER="1", REPO="o/r", **DEFAULTS)
+                    GH_TOKEN="x", PR_NUMBER="1", REPO="o/r", RUNNER_TEMP=str(work), **DEFAULTS)
     base_env.update(env or {})
     collect = subprocess.run(["bash", "-e", "-c", COLLECT], cwd=work, env=base_env, capture_output=True, text=True)
     build = None

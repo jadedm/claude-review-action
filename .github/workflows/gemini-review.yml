@@ -214,6 +214,9 @@ jobs:
           STACK: ${{ inputs.stack }}
           EXTRA_PROMPT: ${{ inputs.extra_prompt }}
           EXTRA_PROMPT_PATH: ${{ inputs.extra_prompt_path }}
+          GH_TOKEN: ${{ github.token }}
+          REPO_FULL_NAME: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
           set -euo pipefail
           ROOT=".claude-review-action"
@@ -234,6 +237,15 @@ jobs:
           CALLS=$(python3 "$ROOT/scripts/gemini_chunks.py" /tmp/review-chunks)
           echo "calls=${CALLS}" >> "$GITHUB_OUTPUT"
 
+          # The review rules come from the pull request's base commit, never its
+          # checkout, so a pull request cannot rewrite the instructions its own
+          # review follows; a change to them applies from the next one (#37).
+          EXTRAS_FILE="$RUNNER_TEMP/review-extras.md"
+          rm -f "$EXTRAS_FILE"
+          if [ -n "$EXTRA_PROMPT_PATH" ]; then
+            python3 -I "$ROOT/scripts/base_file.py" "$REPO_FULL_NAME" "$PR_NUMBER" "$EXTRA_PROMPT_PATH" "$EXTRAS_FILE"
+          fi
+
           {
             cat "$BASE"
             echo ""
@@ -242,17 +254,13 @@ jobs:
             # consumer repo + the optional inline string. Either or both
             # are appended under a single "Repo-specific notes" heading;
             # file contents render first, inline string second.
-            # The same rule as the changed files: a link could point at a runner file (#35).
             EXTRAS_RENDERED=0
-            skip=""
-            if [ -n "$EXTRA_PROMPT_PATH" ] && skip=$(python3 "$ROOT/scripts/safe_path.py" "$EXTRA_PROMPT_PATH"); then
+            if [ -s "$EXTRAS_FILE" ]; then
               echo ""
               echo "## Repo-specific notes"
               echo ""
-              cat < "$EXTRA_PROMPT_PATH"
+              cat < "$EXTRAS_FILE"
               EXTRAS_RENDERED=1
-            elif [ -n "$EXTRA_PROMPT_PATH" ]; then
-              echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' skipped: ${skip}" >&2
             fi
             if [ -n "$EXTRA_PROMPT" ]; then
               if [ "$EXTRAS_RENDERED" -eq 0 ]; then

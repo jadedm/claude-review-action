@@ -114,7 +114,7 @@ The `if:` guard inside each reusable workflow handles the routing — there's no
 The stack prompts (`prompts/<stack>.md`) describe the **stack**, not your specific codebase. To layer in repo-specific conventions (custom guard names, internal paths, threshold tunings, project-specific lint rules), use one of:
 
 - **`extra_prompt: <inline string>`** — for short notes. Multi-line YAML strings get awkward beyond a paragraph.
-- **`extra_prompt_path: <path>`** — points at a markdown file inside the consumer repo (e.g. `.github/review-extras.md`). Read at workflow-run time and appended under a "Repo-specific notes" heading. A symlink, or a path that resolves outside the checkout or into `.git`, is skipped with a warning, because the file comes from the pull request. Cleanest for long-form additions; the file lives in the consumer repo so a PR that changes both the code conventions and the review prompt for them is atomic.
+- **`extra_prompt_path: <path>`**: points at a markdown file in the consumer repo (e.g. `.github/review-extras.md`), appended under a "Repo-specific notes" heading. It is read from the pull request's base branch through the GitHub API, never from the pull request, so a pull request cannot rewrite the rules its own review follows: a change to the file is reviewed like any other change and applies from the next pull request. If the base branch has no such file, the default branch's copy is used; a folder, a link or an unreadable file fails the step.
 
 If both are set, file contents render first, then the inline string — both under one "Repo-specific notes" section.
 
@@ -140,7 +140,7 @@ Example `.github/review-extras.md` in a consumer repo:
 | `ref` | string | `''` | Ref of this repo to load prompts, scripts and the Slack action from. Empty means the commit of the workflow being run, so `@v1.2.3` or `@<sha>` also fixes the prompts and scripts (on GitHub Enterprise Server, which lacks that context, empty means `v1`). Set it only to load them from somewhere else; it names a ref in the repository whose workflow is running, so a fork's caller needs a ref that exists in the fork |
 | `slack_notify` | boolean | `false` | Post a Slack message on completion |
 | `extra_prompt` | string | `''` | Inline repo-specific addendum |
-| `extra_prompt_path` | string | `''` | Path (in consumer repo) to a markdown file appended after the stack prompt. Symlinks and paths outside the checkout or in `.git` are skipped |
+| `extra_prompt_path` | string | `''` | Path (in consumer repo) to a markdown file appended after the stack prompt, read from the pull request's base branch (the default branch if the base lacks it), never from the pull request |
 
 ### Gemini (`gemini-review.yml`)
 
