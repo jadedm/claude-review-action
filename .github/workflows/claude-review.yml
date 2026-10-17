@@ -211,6 +211,10 @@ jobs:
         # workflow, which must match the default branch's copy) it exits green
         # with a warning in the log and nothing on the pull request, so a green
         # check read as reviewed (#15). Say so once on the pull request.
+        # This rests on the pinned action (v1.0.251): the skip returns green
+        # without setting conclusion (src/entrypoints/run.ts:178-183), a run
+        # sets it only on success (:315), and a failed run throws, turning the
+        # step red. Recheck both when the pin moves.
         if: success() && steps.claude-review.outputs.conclusion == ''
         env:
           GH_TOKEN: ${{ github.token }}
@@ -222,7 +226,7 @@ jobs:
           marker="<!-- claude-review-action: not reviewed -->"
           count() { awk '{ n += $1 } END { print n + 0 }'; }  # --paginate prints one count per page
           said=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
-            --jq "[.[] | select(.body | contains(\"$marker\"))] | length" | count)
+            --jq "[.[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\")))] | length" | count)
           workflows=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
             --jq '[.[] | select(.filename | startswith(".github/workflows/"))] | length' | count)
           why="claude-code-action stopped before reviewing; this run's log says why."
@@ -265,6 +269,6 @@ jobs:
         with:
           webhook_url: ${{ secrets.slack_webhook_url }}
           message: |
-            🤖 *Claude* reviewed PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+            🤖 *Claude* on PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
             Repo: ${{ github.repository }} | Status: ${{ steps.skipped.outputs.reviewed == 'false' && '⚠️ Not reviewed (see the comment on the PR)' || (job.status == 'success' && '✅ Completed' || '❌ Failed') }}
             <${{ github.event.pull_request.html_url }}|View PR>
