@@ -137,7 +137,7 @@ Example `.github/review-extras.md` in a consumer repo:
 |---|---|---|---|
 | `stack` | string | (required) | Prompt template name in `prompts/<stack>.md` |
 | `runner` | string (JSON) | `"ubuntu-latest"` | `runs-on` value, JSON-encoded |
-| `ref` | string | `v1` | Ref of this repo to load prompts, scripts and the Slack action from. `v1` moves with releases; a caller that pins the workflow to a commit SHA should set `ref` to the same SHA |
+| `ref` | string | `''` | Ref of this repo to load prompts, scripts and the Slack action from. Empty means the commit of the workflow being run, so `@v1.2.3` or `@<sha>` also fixes the prompts and scripts (on GitHub Enterprise Server, which lacks that context, empty means `v1`). Set it only to load them from somewhere else; it names a ref in the repository whose workflow is running, so a fork's caller needs a ref that exists in the fork |
 | `slack_notify` | boolean | `false` | Post a Slack message on completion |
 | `extra_prompt` | string | `''` | Inline repo-specific addendum |
 | `extra_prompt_path` | string | `''` | Path (in consumer repo) to a markdown file appended after the stack prompt. Symlinks and paths outside the checkout or in `.git` are skipped |
@@ -192,7 +192,7 @@ gh secret set SLACK_WEBHOOK_URL       --repo <owner>/<repo>
 Consumers pin to a tag. Three conventions:
 
 - **`@v1` — floating major (recommended for most repos).** The `v1` tag is moved forward to whichever commit is the latest in the 1.x line. Consumers automatically pick up prompt updates, bug fixes, and non-breaking input additions on their next PR. Breaking changes never land here — they go on `v2` instead.
-- **`@v1.2.3` — strict pin.** Locks the consumer to that exact commit. Use when a repo needs guaranteed determinism (e.g. compliance audits, frozen review criteria).
+- **`@v1.2.3` — strict pin.** Locks the consumer to that exact commit, prompts and scripts included (they load from the workflow's own commit unless `ref` says otherwise). Use when a repo needs guaranteed determinism (e.g. compliance audits, frozen review criteria).
 - **`@main` — bleeding edge.** Not recommended outside of dogfooding within this central repo.
 
 When cutting a release: tag the strict version (e.g. `v1.2.3`) AND fast-forward the floating major (`v1`) to the same commit. Breaking prompt changes (different output format, removed inputs, etc.) require a new major — tag `v2.0.0` + create a new `v2` floating tag; leave `v1` untouched.
