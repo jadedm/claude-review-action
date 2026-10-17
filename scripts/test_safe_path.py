@@ -267,6 +267,16 @@ for wf in ("claude-review.yml", "gemini-review.yml"):
           p.returncode == 0 and not os.path.lexists(work / ".claude-review-action"), p.stderr)
     shutil.rmtree(work); shutil.rmtree(outside)
 
+print("claude tools (#21)")
+cl = (REPO / ".github/workflows/claude-review.yml").read_text()
+args = cl.split("          claude_args: >-\n", 1)[1].split("\n\n", 1)[0]
+check("21.5 the inline comment tool is allowed", '--allowedTools "mcp__github_inline_comment__create_inline_comment"' in args, args[:200])
+check("21.5 the deny list is unchanged: no edits, commits, pushes, gh or credential reads",
+      all(x in args for x in ("Edit,MultiEdit,Write,NotebookEdit", "mcp__github_file_ops__commit_files", "Bash(git push:*)",
+                              "Bash(gh:*)", "Read(~/.git-credentials)", "Read(**/.git/**)", "--permission-mode default")), args[-300:])
+check("21.5 nothing beyond the inline comment tool is allowed", args.count("--allowedTools") == 1
+      and args.split("--allowedTools", 1)[1].split("--disallowedTools", 1)[0].strip() == '"mcp__github_inline_comment__create_inline_comment"', args[:200])
+
 print("claude step output")
 proc, prompt, output = run("claude", marker, ".github/review-extras.md")
 outputs = parse_outputs(output)
