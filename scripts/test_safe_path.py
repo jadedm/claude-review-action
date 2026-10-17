@@ -228,6 +228,19 @@ check("35.18 every inline python3 call runs isolated (-I), so the checkout is no
       inline_calls() and all("python3 -I " in line for _, _, line in inline_calls()),
       [(wf, n) for wf, n, line in inline_calls() if "python3 -I " not in line])
 
+print("comment runs check out the pull request (#16)")
+gem = (REPO / ".github/workflows/gemini-review.yml").read_text()
+step = gem.split("      - name: Checkout consumer repo\n", 1)[1].split("      - name:", 1)[0]
+check("16.1 an issue comment checks out refs/pull/<n>/head; other events keep their own ref",
+      "ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}" in step, step)
+check("16.7 the step still keeps no credentials and full history",
+      "persist-credentials: false" in step and "fetch-depth: 0" in step, step)
+for wf in ("claude-review.yml", "gemini-review.yml"):
+    guard = (REPO / ".github/workflows" / wf).read_text().split("    if: >\n", 1)[1].split("    runs-on:", 1)[0]
+    check(f"16.9 {wf}: a comment needs a pull request and, on a public repo, a role in it",
+          "github.event.issue.pull_request" in guard and '["OWNER","MEMBER","COLLABORATOR"]' in guard
+          and "github.event.repository.private" in guard and "author_association" in guard, guard)
+
 print("claude step output")
 proc, prompt, output = run("claude", marker, ".github/review-extras.md")
 outputs = parse_outputs(output)

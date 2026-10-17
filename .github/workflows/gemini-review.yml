@@ -97,6 +97,11 @@ jobs:
       - name: Checkout consumer repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # A comment run's own commit is the default branch, so it reviewed the
+          # default branch's files (#16); check out the pull request's head
+          # instead. Other events keep their merge ref. Nothing in this job runs
+          # the checkout's content: files are read as text (#29, #35).
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
           fetch-depth: 0
           # Nothing later needs git credentials, and a saved token in
           # .git/config is one file read away from the prompt (#29).
