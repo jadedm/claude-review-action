@@ -283,6 +283,14 @@ check("21.5 nothing beyond the inline comment tool is allowed, in either spellin
       args.count("--allowedTools") == 1 and "--allowed-tools" not in args
       and args == '--allowedTools "mcp__github_inline_comment__create_inline_comment" ' + DENY, args[:200])
 
+print("action checkout ref (#25)")
+for wf in ("claude-review.yml", "gemini-review.yml"):
+    text = (REPO / ".github/workflows" / wf).read_text()
+    step = text.split("      - name: Checkout review action repo (prompts)\n", 1)[1].split("      - name:", 1)[0]
+    check(f"25.5 {wf}: the action checkout takes the caller's ref, else the workflow's own commit, else v1",
+          "ref: ${{ inputs.ref || job.workflow_sha || 'v1' }}" in step, step)
+    check(f"25.4 {wf}: the ref input defaults to empty", "        default: ''" in text.split("      ref:\n", 1)[1].split("      slack_notify:", 1)[0].split("      model:", 1)[0], text.split("      ref:\n", 1)[1][:300])
+
 print("claude step output")
 proc, prompt, output = run("claude", marker, ".github/review-extras.md")
 outputs = parse_outputs(output)

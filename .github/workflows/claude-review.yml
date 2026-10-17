@@ -12,9 +12,9 @@ on:
         type: string
         default: '"ubuntu-latest"'
       ref:
-        description: 'Ref of this repo to load prompts, scripts and the Slack action from (tag / branch / sha). Set it to the same SHA when pinning this workflow by SHA'
+        description: 'Ref of this repo to load prompts, scripts and the Slack action from (tag / branch / sha). Empty means the commit of this workflow that is running, so a caller pinned by tag or SHA gets prompts and scripts from the same commit (#25)'
         type: string
-        default: 'v1'
+        default: ''
       slack_notify:
         description: 'Whether to send a Slack notification after the run'
         type: boolean
@@ -78,7 +78,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: jadedm/claude-review-action
-          ref: ${{ inputs.ref }}
+          # This workflow's own commit unless the caller names a ref (#25).
+          # job.workflow_sha is empty on GitHub Enterprise Server; v1 is the
+          # old default, not this repo's default branch.
+          ref: ${{ inputs.ref || job.workflow_sha || 'v1' }}
           path: .claude-review-action
           token: ${{ github.token }}
           persist-credentials: false
