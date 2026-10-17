@@ -26,5 +26,7 @@ jobs:
         run: python3 scripts/test_gemini_calls.py
       - name: Safe extras path (#35)
         run: python3 scripts/test_safe_path.py
+      - name: Claude skip notice (#15)
+        run: python3 scripts/test_claude_skip.py
       - name: Repo protection script (sandbox#60)
         run: python3 scripts/test_repo_protection.py

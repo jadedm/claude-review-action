@@ -204,6 +204,39 @@ jobs:
             --allowedTools "mcp__github_inline_comment__create_inline_comment"
             --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*),Read(//proc/**),Read(~/.claude/**),Read(~/.config/**),Read(~/.ssh/**),Read(~/.docker/**),Read(~/.git-credentials),Read(~/.gitconfig),Read(~/.aws/**),Read(~/.kube/**),Read(~/.azure/**),Read(~/.gnupg/**),Read(~/.npmrc),Read(~/.netrc),Read(~/.pypirc),Read(//**/_temp/_runner_file_commands/**),Read(//**/_temp/git-credentials-*),Read(//**/.credentials),Read(//**/.credentials_rsaparams),Read(//**/.runner),Read(//**/_diag/**),Read(**/.git/**)" --permission-mode default
 
+      - name: Say when Claude did not review
+        id: skipped
+        # claude-code-action sets its conclusion output only when Claude ran.
+        # On a workflow validation skip (the pull request edits the calling
+        # workflow, which must match the default branch's copy) it exits green
+        # with a warning in the log and nothing on the pull request, so a green
+        # check read as reviewed (#15). Say so once on the pull request.
+        if: success() && steps.claude-review.outputs.conclusion == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          echo "reviewed=false" >> "$GITHUB_OUTPUT"
+          marker="<!-- claude-review-action: not reviewed -->"
+          count() { awk '{ n += $1 } END { print n + 0 }'; }  # --paginate prints one count per page
+          said=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq "[.[] | select(.body | contains(\"$marker\"))] | length" | count)
+          workflows=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '[.[] | select(.filename | startswith(".github/workflows/"))] | length' | count)
+          why="claude-code-action stopped before reviewing; this run's log says why."
+          if [ "$workflows" -gt 0 ]; then
+            why="This pull request changes a file under \`.github/workflows/\`, and claude-code-action reviews only when the calling workflow matches the default branch's copy. Reviews resume on pull requests opened or updated after this change is merged."
+          fi
+          echo "::warning::Claude did not review this pull request. ${why}"
+          if [ "$said" -gt 0 ]; then
+            echo "Already said on this pull request; not posting again."
+            exit 0
+          fi
+          printf '%s\n\n**Claude did not review this pull request.** %s\n' "$marker" "$why" > "$RUNNER_TEMP/not-reviewed.md"
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$RUNNER_TEMP/not-reviewed.md"
+
       - name: Check the reviewer changed no files
         # A tripwire, not a proof: it sees tracked and untracked changes in the
         # checkout, such as an edit some future change lets through. It does
@@ -233,5 +266,5 @@ jobs:
           webhook_url: ${{ secrets.slack_webhook_url }}
           message: |
             🤖 *Claude* reviewed PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
-            Repo: ${{ github.repository }} | Status: ${{ job.status == 'success' && '✅ Completed' || '❌ Failed' }}
+            Repo: ${{ github.repository }} | Status: ${{ steps.skipped.outputs.reviewed == 'false' && '⚠️ Not reviewed (see the comment on the PR)' || (job.status == 'success' && '✅ Completed' || '❌ Failed') }}
             <${{ github.event.pull_request.html_url }}|View PR>
