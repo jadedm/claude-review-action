@@ -93,7 +93,7 @@ reply(200, review(name))
 '''
 
 
-def run_calls(chunk_names, thinking="high", model="m"):
+def run_calls(chunk_names, thinking="high", model="m", plant=None):
     """chunk_names: one list of file names per call. Returns (proc, review, coverage, seconds).
     The request bodies the stub received are in BODIES after the call."""
     shutil.rmtree(CHUNKS, ignore_errors=True)
@@ -101,6 +101,9 @@ def run_calls(chunk_names, thinking="high", model="m"):
         p.unlink(missing_ok=True)
     work = pathlib.Path(tempfile.mkdtemp())
     (work / ".claude-review-action").symlink_to(REPO)
+    for name in ("json.py", "secrets.py", "sys.py"):
+        if plant:
+            (work / name).write_text(f"open({str(plant)!r}, 'a').write(__name__ + '\\n')\n")
     bin_dir = work / "_bin"
     bin_dir.mkdir()
     (bin_dir / "curl").write_text(STUB)
@@ -214,6 +217,11 @@ for model in ("gemini-2.5-flash", "gemini-1.5-pro"):
           BODIES and "thinkingConfig" not in BODIES[0]["generationConfig"] and "does not take thinking_level" in proc.stdout, BODIES)
 proc, review, cov, secs = run_calls([["plain.py"]], model="gemini-3.8-flash")
 check("33.11 gemini-3.8-flash still gets thinkingLevel", BODIES and BODIES[0]["generationConfig"].get("thinkingConfig") == {"thinkingLevel": "high"}, BODIES)
+mark = pathlib.Path(tempfile.mkdtemp()) / "imported"
+proc, review, cov, secs = run_calls([["plain.py"]], plant=mark)
+check("35.17 a json.py in the checkout is never imported by the Call step", proc.returncode == 0 and not mark.exists(),
+      mark.read_text() if mark.exists() else proc.stdout[-200:])
+shutil.rmtree(mark.parent)
 wf = WORKFLOW.read_text().splitlines()
 at = wf.index("      thinking_level:")
 block = wf[at + 1:at + 4]  # description, type, default

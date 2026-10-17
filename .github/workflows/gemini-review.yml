@@ -304,7 +304,7 @@ jobs:
           ## Git Diff
 
           $(cat "$dir/diff.txt")"
-            escaped=$(printf '%s\n' "$full" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.buffer.read().decode("utf-8", "replace")))')
+            escaped=$(printf '%s\n' "$full" | python3 -I -c 'import sys,json; print(json.dumps(sys.stdin.buffer.read().decode("utf-8", "replace")))')
             for attempt in 1 2 3; do
               rc=0
               http=$(curl -s -w "%{http_code}" -o "$result" \
@@ -347,7 +347,7 @@ jobs:
             # Gemini quotes code with backslashes such as \d inside its JSON
             # reply; the parser repairs those escapes (#8). Exit 2 means the
             # reply was unreadable, and the raw text stays in this log only.
-            python3 -c 'import json, sys; u = json.load(open(sys.argv[1])).get("usageMetadata", {}); print("Tokens: prompt %s, thinking %s, output %s" % (u.get("promptTokenCount"), u.get("thoughtsTokenCount", "not reported"), u.get("candidatesTokenCount")))' "$result" 2>/dev/null || echo "Tokens: unreadable"
+            python3 -I -c 'import json, sys; u = json.load(open(sys.argv[1])).get("usageMetadata", {}); print("Tokens: prompt %s, thinking %s, output %s" % (u.get("promptTokenCount"), u.get("thoughtsTokenCount", "not reported"), u.get("candidatesTokenCount")))' "$result" 2>/dev/null || echo "Tokens: unreadable"
             rc=0
             python3 .claude-review-action/scripts/gemini_review_parse.py "$result" "$dir/review.json" || rc=$?
             if [ "$rc" -eq 0 ]; then echo ok > "$dir/status"; return 0; fi
@@ -387,13 +387,13 @@ jobs:
           COMMENT=$(python3 .claude-review-action/scripts/gemini_review_comment.py /tmp/gemini-review.json /tmp/review-coverage.json)
           gh pr comment ${{ github.event.pull_request.number || github.event.issue.number }} --body "$COMMENT"
 
-          if python3 -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('nothing_sent') else 1)"; then
+          if python3 -I -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('nothing_sent') else 1)"; then
             echo "assessment=not_reviewed" >> "$GITHUB_OUTPUT"
             echo "issue_count=n/a" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if python3 -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('unparsed') else 1)"; then
+          if python3 -I -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('unparsed') else 1)"; then
             echo "assessment=unparsed" >> "$GITHUB_OUTPUT"
             echo "issue_count=?" >> "$GITHUB_OUTPUT"
             echo "::error::Gemini's reply could not be read as a review; see the Call Gemini API step log"
@@ -402,8 +402,8 @@ jobs:
 
           # Only a known verdict reaches the outputs: the model's own text could
           # carry a newline and write extra output lines.
-          echo "assessment=$(python3 -c "import json; a=json.load(open('/tmp/gemini-review.json')).get('overall_assessment'); print(a if a in ('approve','comment','request_changes') else 'other')")" >> "$GITHUB_OUTPUT"
-          echo "issue_count=$(python3 -c "import json; print(len(json.load(open('/tmp/gemini-review.json')).get('issues', [])))")" >> "$GITHUB_OUTPUT"
+          echo "assessment=$(python3 -I -c "import json; a=json.load(open('/tmp/gemini-review.json')).get('overall_assessment'); print(a if a in ('approve','comment','request_changes') else 'other')")" >> "$GITHUB_OUTPUT"
+          echo "issue_count=$(python3 -I -c "import json; print(len(json.load(open('/tmp/gemini-review.json')).get('issues', [])))")" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
         if: always() && inputs.slack_notify && github.event_name == 'pull_request'

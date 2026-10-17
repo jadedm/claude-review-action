@@ -109,7 +109,17 @@ def dashed(work, outside):
 
 
 def git_by_case(work, outside):
-    pass  # the path itself names .GIT/config; on a case-insensitive disk it opens .git/config
+    # On a case-sensitive disk .GIT is a separate real folder; on macOS it is .git itself.
+    # Either way the rule must refuse it as .git, not as a missing file.
+    if not (work / ".GIT").exists():
+        (work / ".GIT").mkdir()
+        (work / ".GIT/config").write_text(f"token {TOKEN}\n")
+
+
+def nested_git(work, outside):
+    # A real .git folder below the root, as an action checkout or a submodule has.
+    (work / "vendored/.git").mkdir(parents=True)
+    (work / "vendored/.git/config").write_text(f"token {TOKEN}\n")
 
 
 def marker(work, outside):
@@ -141,7 +151,9 @@ for which in ("claude", "gemini"):
     check("35.9 the inline extra_prompt is still added when the file is refused",
           "INLINE-NOTE-35" in prompt and "Repo-specific notes" in prompt and TOKEN not in prompt, prompt[-200:])
     proc, prompt, _ = run(which, git_by_case, ".GIT/config")
-    check("35.14 a path naming .GIT in another case is refused", TOKEN not in prompt and "skipped:" in proc.stderr, proc.stderr[-300:])
+    check("35.14 a path naming .GIT in another case is refused as .git", TOKEN not in prompt and "skipped: inside .git" in proc.stderr, proc.stderr[-300:])
+    proc, prompt, _ = run(which, nested_git, "vendored/.git/config")
+    check("35.15 a real .git folder below the root is refused as .git", TOKEN not in prompt and "skipped: inside .git" in proc.stderr, proc.stderr[-300:])
 
 def parse_outputs(text):
     """GITHUB_OUTPUT read as the runner reads it: name=value, or name<<END ... END."""
@@ -182,6 +194,39 @@ for wf in ("claude-review.yml", "gemini-review.yml"):
     guard = text.split("    if: >\n", 1)[1].split("    runs-on:", 1)[0]
     check(f"35.16 {wf}: the job guard admits pull_request and comments only, never pull_request_target",
           "github.event_name == 'pull_request' ||" in guard and "pull_request_target" not in guard, guard[:200])
+
+print("modules planted in the checkout (#35)")
+PLANT = "import os\nopen(os.environ['PLANT_MARK'], 'a').write(__name__ + '\\n')\n"
+
+
+def planted(work, outside):
+    plain(work, outside)
+    for name in ("json.py", "secrets.py", "sys.py", "io.py"):
+        (work / name).write_text(PLANT)
+
+
+for which in ("claude", "gemini"):
+    mark = pathlib.Path(tempfile.mkdtemp()) / "imported"
+    os.environ["PLANT_MARK"] = str(mark)
+    proc, prompt, _ = run(which, planted, ".github/review-extras.md")
+    check(f"35.17 {which}: a json.py or secrets.py in the checkout is never imported by the step",
+          proc.returncode == 0 and not mark.exists(), mark.read_text() if mark.exists() else proc.stderr[-200:])
+    shutil.rmtree(mark.parent)
+
+
+def inline_calls():
+    """Every inline python3 call in both workflows."""
+    calls = []
+    for wf in ("claude-review.yml", "gemini-review.yml"):
+        for n, line in enumerate((REPO / ".github/workflows" / wf).read_text().splitlines(), 1):
+            if "python3 -c" in line or "python3 -I -c" in line or "python3 - " in line:
+                calls.append((wf, n, line.strip()))
+    return calls
+
+
+check("35.18 every inline python3 call runs isolated (-I), so the checkout is not on its import path",
+      inline_calls() and all("python3 -I " in line for _, _, line in inline_calls()),
+      [(wf, n) for wf, n, line in inline_calls() if "python3 -I " not in line])
 
 print("claude step output")
 proc, prompt, output = run("claude", marker, ".github/review-extras.md")

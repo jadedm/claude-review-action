@@ -142,7 +142,7 @@ jobs:
           # A random end marker: the prompt holds the pull request's extras file, and
           # a line equal to a fixed marker would end the value early and write the
           # lines after it as outputs of this step (#35).
-          end="PROMPT_$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+          end="PROMPT_$(python3 -I -c 'import secrets; print(secrets.token_hex(16))')"
           {
             echo "PROMPT<<${end}"
             cat /tmp/prompt.md
