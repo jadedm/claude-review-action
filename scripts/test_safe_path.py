@@ -39,7 +39,11 @@ def check(label, ok, detail=""):
 def step_script(workflow, name):
     lines = (REPO / ".github/workflows" / workflow).read_text().splitlines()
     start = next(i for i, l in enumerate(lines) if l.strip() == f"- name: {name}")
-    run = next(i for i in range(start, len(lines)) if lines[i].strip() == "run: |")
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("- name:")), len(lines))
+    inline = [l.strip()[len("run: "):] for l in lines[start:end] if l.strip().startswith("run: ") and l.strip() != "run: |"]
+    if inline:
+        return inline[0] + "\n"  # a one-line run:
+    run = next(i for i in range(start, end) if lines[i].strip() == "run: |")
     body, indent = [], None
     for line in lines[run + 1:]:
         if line.strip() and indent is None:
@@ -240,6 +244,28 @@ for wf in ("claude-review.yml", "gemini-review.yml"):
     check(f"16.9 {wf}: a comment needs a pull request and, on a public repo, a role in it",
           "github.event.issue.pull_request" in guard and '["OWNER","MEMBER","COLLABORATOR"]' in guard
           and "github.event.repository.private" in guard and "author_association" in guard, guard)
+
+print("a .claude-review-action in the pull request (#16)")
+for wf in ("claude-review.yml", "gemini-review.yml"):
+    try:
+        clear = step_script(wf, "Clear the action folder")
+    except StopIteration:
+        check(f"16.10 {wf}: a step clears .claude-review-action before the action checkout", False, "no such step")
+        continue
+    text = (REPO / ".github/workflows" / wf).read_text()
+    check(f"16.10 {wf}: the clearing step runs before the action checkout",
+          text.index("- name: Clear the action folder") < text.index("- name: Checkout review action repo"), "order")
+    work = pathlib.Path(tempfile.mkdtemp()); outside = pathlib.Path(tempfile.mkdtemp())
+    (outside / "keep.txt").write_text("runner file\n")
+    (work / ".claude-review-action").symlink_to(outside)
+    p = subprocess.run(["bash", "-e", "-c", clear], cwd=work, capture_output=True, text=True)
+    check(f"16.10 {wf}: a symlinked .claude-review-action is removed, its target left intact",
+          p.returncode == 0 and not os.path.lexists(work / ".claude-review-action") and (outside / "keep.txt").exists(), p.stderr)
+    (work / ".claude-review-action").mkdir(); (work / ".claude-review-action/planted.py").write_text("x = 1\n")
+    p = subprocess.run(["bash", "-e", "-c", clear], cwd=work, capture_output=True, text=True)
+    check(f"16.10 {wf}: a real .claude-review-action folder from the pull request is removed",
+          p.returncode == 0 and not os.path.lexists(work / ".claude-review-action"), p.stderr)
+    shutil.rmtree(work); shutil.rmtree(outside)
 
 print("claude step output")
 proc, prompt, output = run("claude", marker, ".github/review-extras.md")
