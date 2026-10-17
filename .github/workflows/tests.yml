@@ -28,5 +28,7 @@ jobs:
         run: python3 scripts/test_safe_path.py
       - name: Claude skip notice (#15)
         run: python3 scripts/test_claude_skip.py
+      - name: Rules from the base branch (#37)
+        run: python3 scripts/test_base_file.py
       - name: Repo protection script (sandbox#60)
         run: python3 scripts/test_repo_protection.py

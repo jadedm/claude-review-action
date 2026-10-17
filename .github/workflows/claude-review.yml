@@ -98,6 +98,7 @@ jobs:
           EXTRA_PROMPT: ${{ inputs.extra_prompt }}
           EXTRA_PROMPT_PATH: ${{ inputs.extra_prompt_path }}
           REPO_FULL_NAME: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
           set -euo pipefail
@@ -127,6 +128,15 @@ jobs:
             fi
           }
 
+          # The review rules come from the pull request's base commit, never its
+          # checkout, so a pull request cannot rewrite the instructions its own
+          # review follows; a change to them applies from the next one (#37).
+          EXTRAS_FILE="$RUNNER_TEMP/review-extras.md"
+          rm -f "$EXTRAS_FILE"
+          if [ -n "$EXTRA_PROMPT_PATH" ]; then
+            python3 -I "$ROOT/scripts/base_file.py" "$REPO_FULL_NAME" "$PR_NUMBER" "$EXTRA_PROMPT_PATH" "$EXTRAS_FILE"
+          fi
+
           {
             echo "REPO: ${REPO_FULL_NAME}"
             echo "PR NUMBER: ${PR_NUMBER}"
@@ -134,15 +144,9 @@ jobs:
             cat "$BASE"
             echo ""
             cat "$STACK_FILE"
-            # The checkout is the pull request's content. A link here could point at
-            # .git/config, which holds this job's token, and this step reads the file
-            # itself, so the reviewer's Read deny list would not stop it (#35).
-            skip=""
-            if [ -n "$EXTRA_PROMPT_PATH" ] && skip=$(python3 "$ROOT/scripts/safe_path.py" "$EXTRA_PROMPT_PATH"); then
+            if [ -s "$EXTRAS_FILE" ]; then
               render_extras_header_once
-              cat < "$EXTRA_PROMPT_PATH"
-            elif [ -n "$EXTRA_PROMPT_PATH" ]; then
-              echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' skipped: ${skip}" >&2
+              cat < "$EXTRAS_FILE"
             fi
             if [ -n "$EXTRA_PROMPT" ]; then
               render_extras_header_once
