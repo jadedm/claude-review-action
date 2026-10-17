@@ -92,7 +92,7 @@ That's the entire integration. Updates to the prompts in this central repo propa
 
 ### Do not switch the trigger to `pull_request_target`
 
-On a public repo, pull requests from forks get no secrets under `pull_request`, so both reviewers fail for outside contributors. Changing the trigger to `pull_request_target` makes them work by running the job with your secrets and a write token while the model reads the fork's diff, and Claude can fetch the fork's files. Anyone who opens a pull request can then steer a job holding your Claude token and Gemini key. Keep `pull_request`.
+On a public repo, pull requests from forks get no secrets under `pull_request`, so both reviewers fail for outside contributors. `pull_request_target` would run with your secrets and a write token while the model reads the fork's content, which lets anyone who opens a pull request steer a job holding your Claude token and Gemini key. Both workflows therefore run only on `pull_request` and comment events: a caller switched to `pull_request_target` gets a skipped review. Do not copy the workflows and loosen that guard.
 
 A maintainer's `@claude` comment on a fork's pull request also runs with secrets, and Claude reads the fork's files; `@gemini` sends the fork's diff. Read the pull request before asking for a review on it.
 

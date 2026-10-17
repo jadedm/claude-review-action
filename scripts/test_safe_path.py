@@ -161,6 +161,28 @@ def parse_outputs(text):
     return outputs
 
 
+print("paths named directly")
+for which in ("claude", "gemini"):
+    for path, label in (("../secret.txt", "a ../ path"), (".git/config", ".git/config named directly"),
+                        (".claude-review-action/.git/config", "the action checkout's .git")):
+        def layout(work, outside):
+            (work.parent / "secret.txt").write_text(OUTSIDE + "\n")
+        proc, prompt, _ = run(which, layout, path)
+        pathlib.Path(tempfile.gettempdir(), "secret.txt").unlink(missing_ok=True)
+        check(f"35.15 {which}: {label} is refused", TOKEN not in prompt and OUTSIDE not in prompt and "skipped:" in proc.stderr, proc.stderr[-200:])
+    abs_path = str(pathlib.Path(tempfile.mkdtemp()) / "abs.txt")
+    pathlib.Path(abs_path).write_text(OUTSIDE + "\n")
+    proc, prompt, _ = run(which, lambda w, o: None, abs_path)
+    check(f"35.15 {which}: an absolute path outside is refused", OUTSIDE not in prompt and "skipped: outside the checkout" in proc.stderr, proc.stderr[-200:])
+    shutil.rmtree(pathlib.Path(abs_path).parent)
+
+print("job guards")
+for wf in ("claude-review.yml", "gemini-review.yml"):
+    text = (REPO / ".github/workflows" / wf).read_text()
+    guard = text.split("    if: >\n", 1)[1].split("    runs-on:", 1)[0]
+    check(f"35.16 {wf}: the job guard admits pull_request and comments only, never pull_request_target",
+          "github.event_name == 'pull_request' ||" in guard and "pull_request_target" not in guard, guard[:200])
+
 print("claude step output")
 proc, prompt, output = run("claude", marker, ".github/review-extras.md")
 outputs = parse_outputs(output)
