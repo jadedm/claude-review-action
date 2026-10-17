@@ -76,7 +76,9 @@ def normal(ruleset):
 
 
 def check_rulesets(repo, apply):
-    live = {r["name"]: r["id"] for r in gh(f"repos/{repo}/rulesets") or []}
+    # 100 per page (the default 30 could hide one), and this repo's own rulesets
+    # only, so an org-level ruleset of the same name is not taken for it.
+    live = {r["name"]: r["id"] for r in gh(f"repos/{repo}/rulesets?per_page=100&includes_parents=false") or []}
     problems = 0
     for wanted in RULESETS:
         name = wanted["name"]
@@ -118,7 +120,11 @@ def main():
     a = ap.parse_args()
     print(f"{a.repo} ({'apply' if a.apply else 'report only'}):")
     problems = check_rulesets(a.repo, a.apply) + check_token(a.repo, a.apply)
-    return 1 if problems else 0
+    if not a.apply:
+        return 1 if problems else 0
+    # Read back what was written: the API may store less than it was sent.
+    print("after:")
+    return 1 if check_rulesets(a.repo, False) + check_token(a.repo, False) else 0
 
 
 if __name__ == "__main__":

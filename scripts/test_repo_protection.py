@@ -26,13 +26,19 @@ method = "GET"
 if "-X" in args:
     method = args[args.index("-X") + 1]
 path = [a for a in args if a.startswith("repos/")][0]
+query = path.split("?", 1)[1] if "?" in path else ""
+path = path.split("?", 1)[0]
+open(os.environ["STUB_CALLS"] + ".query", "a").write(query + "\n")
 if state.get("fail"):
     sys.stderr.write("HTTP 500: boom\n"); sys.exit(1)
 body = json.loads(sys.stdin.read()) if "--input" in args else None
 if path.endswith("/rulesets") and method == "GET":
     print(json.dumps([{"id": r["id"], "name": r["name"]} for r in state["rulesets"]]))
 elif path.endswith("/rulesets") and method == "POST":
-    body["id"] = 100 + len(state["rulesets"]); state["rulesets"].append(body); print(json.dumps(body))
+    body["id"] = 100 + len(state["rulesets"])
+    if state.get("drop_bypass"):
+        body["bypass_actors"] = []  # the API quietly stores less than was sent
+    state["rulesets"].append(body); print(json.dumps(body))
 elif "/rulesets/" in path and method == "GET":
     rid = int(path.rsplit("/", 1)[1]); print(json.dumps(next(r for r in state["rulesets"] if r["id"] == rid)))
 elif path.endswith("/actions/permissions/workflow") and method == "GET":
@@ -130,6 +136,14 @@ check("7 --apply sets the token to read and no approvals", p.returncode == 0 and
 
 p, calls, end = run({"rulesets": [], "token": good_token, "fail": True}, "--apply")
 check("8 a failing gh call stops with its error and a non-zero exit", p.returncode != 0 and "HTTP 500" in p.stderr, (p.returncode, p.stderr))
+
+p, calls, end = run({"rulesets": [], "token": good_token, "drop_bypass": True}, "--apply")
+check("9 --apply reads back what it wrote: a ruleset stored without its bypass fails the run",
+      p.returncode == 1 and "differs in bypass_actors" in p.stdout, p.stdout)
+p, calls, end = run({"rulesets": live_like(), "token": good_token})
+lists = [c for c in calls if any(a.startswith("repos/o/r/rulesets?") for a in c)]
+check("10 the list asks for 100 per page and this repo's own rulesets only",
+      lists and all("per_page=100" in a and "includes_parents=false" in a for c in lists for a in c if a.startswith("repos/o/r/rulesets?")), calls[:2])
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
