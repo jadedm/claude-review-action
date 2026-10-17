@@ -58,6 +58,10 @@ args = sys.argv[1:]
 out = args[args.index("-o") + 1]
 body = sys.stdin.read()
 state = os.environ["STUB_STATE"]
+with open(os.path.join(state, "argv.jsonl"), "a") as f:
+    f.write(json.dumps(args) + "\n")
+with open(os.path.join(state, "bodies.jsonl"), "a") as f:
+    f.write(json.dumps(json.loads(body)) + "\n")  # json.loads: an invalid body fails the call
 def reply(code, payload):
     with open(out, "w") as f:
         f.write(payload)
@@ -66,7 +70,9 @@ def reply(code, payload):
 def review(summary):
     text = json.dumps({"summary": summary, "issues": [{"file": summary, "line": 1, "description": "d",
                        "severity": "low", "category": "c"}], "positives": [], "overall_assessment": "comment"})
-    return json.dumps({"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}]})
+    n = sum(map(ord, summary)) % 1000  # distinct per file, so each call's log line can be told apart
+    return json.dumps({"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}],
+                       "usageMetadata": {"promptTokenCount": n, "thoughtsTokenCount": n + 1, "candidatesTokenCount": n + 2}})
 name = next((n for n in ("fail500", "timeout", "flaky429", "unreadable", "slow", "fast", "plain") if f"--- {n}.py ---" in body), "plain")
 if name == "fail500":
     reply(500, '{"error": {"message": "boom"}}')
@@ -85,8 +91,9 @@ reply(200, review(name))
 '''
 
 
-def run_calls(chunk_names):
-    """chunk_names: one list of file names per call. Returns (proc, review, coverage, seconds)."""
+def run_calls(chunk_names, thinking="high"):
+    """chunk_names: one list of file names per call. Returns (proc, review, coverage, seconds).
+    The request bodies the stub received are in BODIES after the call."""
     shutil.rmtree(CHUNKS, ignore_errors=True)
     for p in TMP:
         p.unlink(missing_ok=True)
@@ -108,15 +115,24 @@ def run_calls(chunk_names):
         (d / "files.json").write_text(json.dumps(names))
     pathlib.Path("/tmp/review-prompt.txt").write_text("Review this.\n")
     pathlib.Path("/tmp/review-coverage.json").write_text(json.dumps({"omitted": [], "filtered": 0, "diff_sent": 0, "diff_total": 0}))
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GEMINI_API_KEY="k", GEMINI_MODEL="m", STUB_STATE=str(state))
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GEMINI_API_KEY="k", GEMINI_MODEL="m", STUB_STATE=str(state),
+               THINKING_LEVEL=thinking)
     start = time.monotonic()
     proc = subprocess.run(["bash", "-e", "-c", CALL], cwd=work, env=env, capture_output=True, text=True)
     seconds = time.monotonic() - start
     out = pathlib.Path("/tmp/gemini-review.json")
     review = json.loads(out.read_text()) if out.exists() else None
     coverage = json.loads(pathlib.Path("/tmp/review-coverage.json").read_text())
+    bodies = state / "bodies.jsonl"
+    BODIES[:] = [json.loads(l) for l in bodies.read_text().splitlines()] if bodies.exists() else []
+    argv = state / "argv.jsonl"
+    ARGV[:] = [json.loads(l) for l in argv.read_text().splitlines()] if argv.exists() else []
     shutil.rmtree(work)
     return proc, review, coverage, seconds
+
+
+BODIES = []
+ARGV = []
 
 
 def reasons(coverage):
@@ -153,6 +169,43 @@ check("30.11 an unreadable reply beside a good one: posts, the unreadable call's
 proc, review, cov, secs = run_calls(None)
 check("30.28 no planned calls: the step exits 0 and writes a nothing-sent review",
       proc.returncode == 0 and review == {"nothing_sent": True}, (proc.returncode, proc.stdout[-300:], proc.stderr[-300:]))
+
+print("thinking (#33)")
+proc, review, cov, secs = run_calls([["plain.py"]])
+check("33.1 default: thinkingLevel high is sent",
+      proc.returncode == 0 and [b["generationConfig"].get("thinkingConfig") for b in BODIES] == [{"thinkingLevel": "high"}], BODIES)
+check("  and the rest of generationConfig is unchanged",
+      {k: v for k, v in BODIES[0]["generationConfig"].items() if k != "thinkingConfig"}
+      == {"maxOutputTokens": 65536, "temperature": 1.0, "responseMimeType": "application/json"}, BODIES)
+check("33.8 the log names the call's tokens", "Tokens: prompt" in proc.stdout, proc.stdout[-300:])
+for level in ("none", ""):
+    proc, review, cov, secs = run_calls([["plain.py"]], thinking=level)
+    check(f"33.2 thinking_level {level!r}: no thinkingConfig",
+          proc.returncode == 0 and BODIES and "thinkingConfig" not in BODIES[0]["generationConfig"], BODIES)
+for level in ("minimal", "low", "medium"):
+    proc, review, cov, secs = run_calls([["plain.py"]], thinking=level)
+    check(f"33.4 thinking_level {level}: sent as given",
+          BODIES and BODIES[0]["generationConfig"].get("thinkingConfig") == {"thinkingLevel": level}, BODIES)
+for level in ("max", 'high"}, "x": {"', "HIGH"):
+    proc, review, cov, secs = run_calls([["plain.py"]], thinking=level)
+    check(f"33.5 thinking_level {level!r} fails before any call",
+          proc.returncode != 0 and "thinking_level must be" in proc.stdout + proc.stderr and BODIES == [], (proc.returncode, BODIES))
+proc, review, cov, secs = run_calls([["plain.py"]])
+check("33.6 curl is given --max-time 420", ARGV and ARGV[0][ARGV[0].index("--max-time") + 1] == "420", ARGV[:1])
+proc, review, cov, secs = run_calls([["timeout.py"], ["plain.py"]])
+check("33.6 a timeout says 420 s", "curl exit 28; 28 means no reply within 420 s" in proc.stdout, proc.stdout[-300:])
+proc, review, cov, secs = run_calls([["slow.py"], ["fast.py"]])
+expect = {name: sum(map(ord, name)) % 1000 for name in ("slow", "fast")}
+check("33.8 two calls each log their own tokens",
+      all(f"Tokens: prompt {n}, thinking {n + 1}, output {n + 2}" in proc.stdout for n in expect.values()), proc.stdout[-500:])
+proc, review, cov, secs = run_calls([["unreadable.py"]])
+check("33.8 a reply with no usage says not reported rather than 0",
+      "Tokens: prompt None, thinking not reported, output None" in proc.stdout, proc.stdout[-300:])
+wf = WORKFLOW.read_text().splitlines()
+at = wf.index("      thinking_level:")
+block = wf[at + 1:at + 4]  # description, type, default
+check("33.1 the workflow's own default is high, and the step reads the input",
+      "        default: 'high'" in block and "          THINKING_LEVEL: ${{ inputs.thinking_level }}" in wf, block)
 
 shutil.rmtree(CHUNKS, ignore_errors=True)
 for p in TMP:

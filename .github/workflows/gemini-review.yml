@@ -19,6 +19,10 @@ on:
         description: 'Gemini model name'
         type: string
         default: 'gemini-4-argon'
+      thinking_level:
+        description: 'How hard Gemini thinks before reviewing: minimal, low, medium or high. none sends no thinking setting, which leaves gemini-4-argon not thinking at all (#33)'
+        type: string
+        default: 'high'
       max_total_lines:
         description: 'Max total source lines per Gemini call'
         type: number
@@ -253,9 +257,18 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.gemini_api_key }}
           GEMINI_MODEL: ${{ inputs.model }}
+          THINKING_LEVEL: ${{ inputs.thinking_level }}
         run: |
           set -euo pipefail
           PROMPT=$(cat /tmp/review-prompt.txt)
+          # Only a known level reaches the request body, so the input cannot add JSON.
+          # gemini-4-argon does no thinking unless asked; with high it found the most
+          # defects and no false ones in a blind comparison (jadedm/sandbox#101).
+          case "$THINKING_LEVEL" in
+            ""|none) THINKING="" ;;
+            minimal|low|medium|high) THINKING=", \"thinkingConfig\": {\"thinkingLevel\": \"${THINKING_LEVEL}\"}" ;;
+            *) echo "::error::thinking_level must be none, minimal, low, medium or high, got '${THINKING_LEVEL}'"; exit 1 ;;
+          esac
           API_URL="https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent"
 
           # Thinking models spend output tokens on thinking, and they count
@@ -263,7 +276,9 @@ jobs:
           # output tokens on gemini-3.1-pro-preview, and 22 to 31 s on
           # gemini-4-argon (#27). At the #29 caps, 238k prompt tokens took 28 s
           # on gemini-4-argon; 137k took 241 s on gemini-3.8-flash, which
-          # thinks longer, so a Flash caller with large PRs may hit 300 s.
+          # thinks longer, so a Flash caller with large PRs may hit 300 s. With
+          # thinking on, argon took up to 232 s on a 210k-token request (#33), so
+          # each call now gets 420 s.
           #
           # One call per chunk (#30), run in parallel. A call records its
           # outcome in <dir>/status (ok, unreadable or failed) and never ends
@@ -287,7 +302,7 @@ jobs:
                 "$API_URL" \
                 -H 'Content-Type: application/json' \
                 -H "X-goog-api-key: ${GEMINI_API_KEY}" \
-                --max-time 300 \
+                --max-time 420 \
                 -X POST \
                 -d @- <<CURL_EOF
           {
@@ -295,13 +310,13 @@ jobs:
             "generationConfig": {
               "maxOutputTokens": 65536,
               "temperature": 1.0,
-              "responseMimeType": "application/json"
+              "responseMimeType": "application/json"${THINKING}
             }
           }
           CURL_EOF
               ) || rc=$?
               if [ "$rc" -ne 0 ]; then
-                echo "Gemini API request failed (curl exit ${rc}; 28 means no reply within 300 s)"
+                echo "Gemini API request failed (curl exit ${rc}; 28 means no reply within 420 s)"
                 echo failed > "$dir/status"
                 return 0
               fi
@@ -323,6 +338,7 @@ jobs:
             # Gemini quotes code with backslashes such as \d inside its JSON
             # reply; the parser repairs those escapes (#8). Exit 2 means the
             # reply was unreadable, and the raw text stays in this log only.
+            python3 -c 'import json, sys; u = json.load(open(sys.argv[1])).get("usageMetadata", {}); print("Tokens: prompt %s, thinking %s, output %s" % (u.get("promptTokenCount"), u.get("thoughtsTokenCount", "not reported"), u.get("candidatesTokenCount")))' "$result" || echo "Tokens: unreadable"
             rc=0
             python3 .claude-review-action/scripts/gemini_review_parse.py "$result" "$dir/review.json" || rc=$?
             if [ "$rc" -eq 0 ]; then echo ok > "$dir/status"; return 0; fi

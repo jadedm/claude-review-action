@@ -142,7 +142,8 @@ All Claude inputs above, plus:
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `model` | string | `gemini-4-argon` | Gemini model ID. Set `gemini-3.8-flash` for a faster, cheaper review |
+| `model` | string | `gemini-4-argon` | Gemini model ID. Set `gemini-3.8-flash` for a cheaper review |
+| `thinking_level` | string | `high` | `minimal`, `low`, `medium`, `high`, or `none` to send no thinking setting. `gemini-4-argon` does not think unless asked |
 | `max_total_lines` | number | `20000` | Source lines per Gemini call |
 | `max_per_file` | number | `3000` | Skip files larger than this |
 | `max_files` | number | `50` | Files per Gemini call |
