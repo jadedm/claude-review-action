@@ -20,7 +20,7 @@ on:
         type: string
         default: 'gemini-4-argon'
       thinking_level:
-        description: 'How hard Gemini thinks before reviewing: minimal, low, medium or high. none sends no thinking setting, which leaves gemini-4-argon not thinking at all (#33)'
+        description: 'How hard Gemini thinks before reviewing: minimal, low, medium or high. none or an empty value sends no thinking setting, which leaves gemini-4-argon not thinking at all; ignored for gemini-1.x and 2.x models (#33)'
         type: string
         default: 'high'
       max_total_lines:
@@ -269,6 +269,13 @@ jobs:
             minimal|low|medium|high) THINKING=", \"thinkingConfig\": {\"thinkingLevel\": \"${THINKING_LEVEL}\"}" ;;
             *) echo "::error::thinking_level must be none, minimal, low, medium or high, got '${THINKING_LEVEL}'"; exit 1 ;;
           esac
+          # Gemini 1.x and 2.x take thinkingBudget, not thinkingLevel, and answer
+          # 400 to it, so a caller pinned to one keeps working unchanged.
+          case "$GEMINI_MODEL" in
+            gemini-1*|gemini-2*)
+              [ -n "$THINKING" ] && echo "::notice::${GEMINI_MODEL} does not take thinking_level; sending none"
+              THINKING="" ;;
+          esac
           API_URL="https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent"
 
           # Thinking models spend output tokens on thinking, and they count
@@ -276,7 +283,7 @@ jobs:
           # output tokens on gemini-3.1-pro-preview, and 22 to 31 s on
           # gemini-4-argon (#27). At the #29 caps, 238k prompt tokens took 28 s
           # on gemini-4-argon; 137k took 241 s on gemini-3.8-flash, which
-          # thinks longer, so a Flash caller with large PRs may hit 300 s. With
+          # thinks longer (it was before the 420 s limit). With
           # thinking on, argon took up to 232 s on a 210k-token request (#33), so
           # each call now gets 420 s.
           #
@@ -338,7 +345,7 @@ jobs:
             # Gemini quotes code with backslashes such as \d inside its JSON
             # reply; the parser repairs those escapes (#8). Exit 2 means the
             # reply was unreadable, and the raw text stays in this log only.
-            python3 -c 'import json, sys; u = json.load(open(sys.argv[1])).get("usageMetadata", {}); print("Tokens: prompt %s, thinking %s, output %s" % (u.get("promptTokenCount"), u.get("thoughtsTokenCount", "not reported"), u.get("candidatesTokenCount")))' "$result" || echo "Tokens: unreadable"
+            python3 -c 'import json, sys; u = json.load(open(sys.argv[1])).get("usageMetadata", {}); print("Tokens: prompt %s, thinking %s, output %s" % (u.get("promptTokenCount"), u.get("thoughtsTokenCount", "not reported"), u.get("candidatesTokenCount")))' "$result" 2>/dev/null || echo "Tokens: unreadable"
             rc=0
             python3 .claude-review-action/scripts/gemini_review_parse.py "$result" "$dir/review.json" || rc=$?
             if [ "$rc" -eq 0 ]; then echo ok > "$dir/status"; return 0; fi

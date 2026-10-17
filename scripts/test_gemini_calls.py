@@ -73,7 +73,7 @@ def review(summary):
     n = sum(map(ord, summary)) % 1000  # distinct per file, so each call's log line can be told apart
     return json.dumps({"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}],
                        "usageMetadata": {"promptTokenCount": n, "thoughtsTokenCount": n + 1, "candidatesTokenCount": n + 2}})
-name = next((n for n in ("fail500", "timeout", "flaky429", "unreadable", "slow", "fast", "plain") if f"--- {n}.py ---" in body), "plain")
+name = next((n for n in ("fail500", "timeout", "flaky429", "unreadable", "notjson", "slow", "fast", "plain") if f"--- {n}.py ---" in body), "plain")
 if name == "fail500":
     reply(500, '{"error": {"message": "boom"}}')
 if name == "timeout":
@@ -85,13 +85,15 @@ if name == "flaky429":
         reply(429, '{"error": {"message": "slow down"}}')
 if name == "unreadable":
     reply(200, json.dumps({"candidates": [{"content": {"parts": [{"text": "not a review"}]}, "finishReason": "STOP"}]}))
+if name == "notjson":
+    reply(200, "<html>not json</html>")
 if name == "slow":
     time.sleep(3)
 reply(200, review(name))
 '''
 
 
-def run_calls(chunk_names, thinking="high"):
+def run_calls(chunk_names, thinking="high", model="m"):
     """chunk_names: one list of file names per call. Returns (proc, review, coverage, seconds).
     The request bodies the stub received are in BODIES after the call."""
     shutil.rmtree(CHUNKS, ignore_errors=True)
@@ -115,7 +117,7 @@ def run_calls(chunk_names, thinking="high"):
         (d / "files.json").write_text(json.dumps(names))
     pathlib.Path("/tmp/review-prompt.txt").write_text("Review this.\n")
     pathlib.Path("/tmp/review-coverage.json").write_text(json.dumps({"omitted": [], "filtered": 0, "diff_sent": 0, "diff_total": 0}))
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GEMINI_API_KEY="k", GEMINI_MODEL="m", STUB_STATE=str(state),
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GEMINI_API_KEY="k", GEMINI_MODEL=model, STUB_STATE=str(state),
                THINKING_LEVEL=thinking)
     start = time.monotonic()
     proc = subprocess.run(["bash", "-e", "-c", CALL], cwd=work, env=env, capture_output=True, text=True)
@@ -201,6 +203,17 @@ check("33.8 two calls each log their own tokens",
 proc, review, cov, secs = run_calls([["unreadable.py"]])
 check("33.8 a reply with no usage says not reported rather than 0",
       "Tokens: prompt None, thinking not reported, output None" in proc.stdout, proc.stdout[-300:])
+proc, review, cov, secs = run_calls([["notjson.py"], ["plain.py"]])
+check("33.8 a 200 that is not JSON: the token line says unreadable, no traceback, and the call still records its status",
+      "Tokens: unreadable" in proc.stdout and reasons(cov) == {"notjson.py": "review call failed"} and "Traceback" not in proc.stdout
+      and "Call /tmp/review-chunks/1: failed" in proc.stdout,
+      (cov, proc.stdout[-400:]))
+for model in ("gemini-2.5-flash", "gemini-1.5-pro"):
+    proc, review, cov, secs = run_calls([["plain.py"]], model=model)
+    check(f"33.11 {model}: no thinkingLevel sent, with a notice",
+          BODIES and "thinkingConfig" not in BODIES[0]["generationConfig"] and "does not take thinking_level" in proc.stdout, BODIES)
+proc, review, cov, secs = run_calls([["plain.py"]], model="gemini-3.8-flash")
+check("33.11 gemini-3.8-flash still gets thinkingLevel", BODIES and BODIES[0]["generationConfig"].get("thinkingConfig") == {"thinkingLevel": "high"}, BODIES)
 wf = WORKFLOW.read_text().splitlines()
 at = wf.index("      thinking_level:")
 block = wf[at + 1:at + 4]  # description, type, default
