@@ -67,6 +67,13 @@ jobs:
           # the PR branch with these credentials, and a private repo fails
           # without them. The file they live in is on the Read deny list below.
 
+      - name: Clear the action folder
+        # The consumer checkout is the pull request's tree, which could hold its own
+        # .claude-review-action, a symlink to a runner folder included. Remove the
+        # link or folder itself (rm without a trailing slash never follows a link)
+        # before the action repo is checked out into that path.
+        run: rm -rf -- .claude-review-action
+
       - name: Checkout review action repo (prompts)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
