@@ -90,6 +90,12 @@ jobs:
 
 That's the entire integration. Updates to the prompts in this central repo propagate to every consumer on the next PR.
 
+### Do not switch the trigger to `pull_request_target`
+
+On a public repo, pull requests from forks get no secrets under `pull_request`, so both reviewers fail for outside contributors. `pull_request_target` would run with your secrets and a write token while the model reads the fork's content, which lets anyone who opens a pull request steer a job holding your Claude token and Gemini key. Both workflows therefore run only on `pull_request` and comment events: a caller switched to `pull_request_target` gets a skipped review. Do not copy the workflows and loosen that guard.
+
+A maintainer's `@claude` comment on a fork's pull request also runs with secrets, and Claude reads the fork's files; `@gemini` sends the fork's diff. Read the pull request before asking for a review on it.
+
 ### The Claude reviewer and your `.claude/settings.json`
 
 The Claude reviewer runs with no permission to edit files, commit or push, and with reads denied for the places on a runner known to hold credentials: process environments, `.git` folders, credential files in the home folder, the runner's workflow command and credential files, and the runner's own registration files. These are deny rules, and deny rules win, but they name specific commands and paths rather than fencing Claude into the checkout, so they cover the known places, not every place. Claude also applies your repo's `.claude/settings.json` and `.mcp.json` as they are on the pull request's base branch; a pull request cannot change them. Do not allow broad commands there, such as `Bash(git:*)`, `Bash(curl:*)` or `Bash(gh:*)`: a rule like that hands back a way to write or to send data out that the deny list does not name, for example `git -C . push`. On a self-hosted runner, keep other credentials off the machine, or in places this list names.
@@ -108,7 +114,7 @@ The `if:` guard inside each reusable workflow handles the routing — there's no
 The stack prompts (`prompts/<stack>.md`) describe the **stack**, not your specific codebase. To layer in repo-specific conventions (custom guard names, internal paths, threshold tunings, project-specific lint rules), use one of:
 
 - **`extra_prompt: <inline string>`** — for short notes. Multi-line YAML strings get awkward beyond a paragraph.
-- **`extra_prompt_path: <path>`** — points at a markdown file inside the consumer repo (e.g. `.github/review-extras.md`). Read at workflow-run time and appended under a "Repo-specific notes" heading. Cleanest for long-form additions; the file lives in the consumer repo so a PR that changes both the code conventions and the review prompt for them is atomic.
+- **`extra_prompt_path: <path>`** — points at a markdown file inside the consumer repo (e.g. `.github/review-extras.md`). Read at workflow-run time and appended under a "Repo-specific notes" heading. A symlink, or a path that resolves outside the checkout or into `.git`, is skipped with a warning, because the file comes from the pull request. Cleanest for long-form additions; the file lives in the consumer repo so a PR that changes both the code conventions and the review prompt for them is atomic.
 
 If both are set, file contents render first, then the inline string — both under one "Repo-specific notes" section.
 
@@ -134,7 +140,7 @@ Example `.github/review-extras.md` in a consumer repo:
 | `ref` | string | `v1` | Ref of this repo to load prompts, scripts and the Slack action from. `v1` moves with releases; a caller that pins the workflow to a commit SHA should set `ref` to the same SHA |
 | `slack_notify` | boolean | `false` | Post a Slack message on completion |
 | `extra_prompt` | string | `''` | Inline repo-specific addendum |
-| `extra_prompt_path` | string | `''` | Path (in consumer repo) to a markdown file appended after the stack prompt |
+| `extra_prompt_path` | string | `''` | Path (in consumer repo) to a markdown file appended after the stack prompt. Symlinks and paths outside the checkout or in `.git` are skipped |
 
 ### Gemini (`gemini-review.yml`)
 
