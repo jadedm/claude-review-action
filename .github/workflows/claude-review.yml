@@ -12,7 +12,7 @@ on:
         type: string
         default: '"ubuntu-latest"'
       ref:
-        description: 'Pinned ref of this central repo to load prompts from (tag / branch / sha)'
+        description: 'Ref of this repo to load prompts, scripts and the Slack action from (tag / branch / sha). Set it to the same SHA when pinning this workflow by SHA'
         type: string
         default: 'v1'
       slack_notify:
@@ -60,17 +60,21 @@ jobs:
       id-token: write
     steps:
       - name: Checkout consumer repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+          # Keeps the default persist-credentials: claude-code-action fetches
+          # the PR branch with these credentials, and a private repo fails
+          # without them. The file they live in is on the Read deny list below.
 
       - name: Checkout review action repo (prompts)
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: jadedm/claude-review-action
           ref: ${{ inputs.ref }}
           path: .claude-review-action
           token: ${{ github.token }}
+          persist-credentials: false
 
       - name: Compose prompt
         id: prompt
@@ -119,13 +123,15 @@ jobs:
             cat "$BASE"
             echo ""
             cat "$STACK_FILE"
-            if [ -n "$EXTRA_PROMPT_PATH" ]; then
-              if [ -f "$EXTRA_PROMPT_PATH" ]; then
-                render_extras_header_once
-                cat "$EXTRA_PROMPT_PATH"
-              else
-                echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' not found in consumer repo — skipping" >&2
-              fi
+            # The checkout is the pull request's content. A link here could point at
+            # .git/config, which holds this job's token, and this step reads the file
+            # itself, so the reviewer's Read deny list would not stop it (#35).
+            skip=""
+            if [ -n "$EXTRA_PROMPT_PATH" ] && skip=$(python3 "$ROOT/scripts/safe_path.py" "$EXTRA_PROMPT_PATH"); then
+              render_extras_header_once
+              cat < "$EXTRA_PROMPT_PATH"
+            elif [ -n "$EXTRA_PROMPT_PATH" ]; then
+              echo "::warning::extra_prompt_path '$EXTRA_PROMPT_PATH' skipped: ${skip}" >&2
             fi
             if [ -n "$EXTRA_PROMPT" ]; then
               render_extras_header_once
@@ -133,21 +139,79 @@ jobs:
             fi
           } > /tmp/prompt.md
 
+          # A random end marker: the prompt holds the pull request's extras file, and
+          # a line equal to a fixed marker would end the value early and write the
+          # lines after it as outputs of this step (#35).
+          end="PROMPT_$(python3 -I -c 'import secrets; print(secrets.token_hex(16))')"
           {
-            echo "PROMPT<<PROMPT_EOF"
+            echo "PROMPT<<${end}"
             cat /tmp/prompt.md
-            echo "PROMPT_EOF"
+            echo "${end}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Run Claude review
         id: claude-review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9 # v1.0.251
         with:
           claude_code_oauth_token: ${{ secrets.claude_oauth_token }}
           track_progress: true
           include_fix_links: true
           classify_inline_comments: true
           prompt: ${{ steps.prompt.outputs.PROMPT }}
+          # track_progress puts the action in tag mode, which lets Claude edit
+          # files (acceptEdits) and run git add, commit, rm and a push wrapper
+          # that accepts any branch name, all on the Claude App token. On a
+          # fork's pull request the fork's commits sit in a local branch, so
+          # the wrapper alone could push them into this repo. A reviewer has no
+          # reason to write. use_commit_signing swaps the git commands and the
+          # wrapper for two GitHub file tools, and also turns off the action's
+          # own auto-commit at cleanup; the deny list then removes those tools
+          # and the file edit tools. Deny rules win over the action's allow list,
+          # and over a consumer's committed .claude/settings.json, which could
+          # otherwise allow git or gh with the token already in the remote URL
+          # and in GH_TOKEN.
+          #
+          # Tag mode also allows Read, Grep and Glob with no path limit, so text
+          # in the pull request could have the reviewer quote its own
+          # credentials into a comment. The Read rules cover the known stores:
+          # process environments (/proc), credential folders in the home folder
+          # (not the whole home folder: hosted runners check out under it), the
+          # runner's workflow command and credential files in its temp folder
+          # (the rest of it holds CI logs the reviewer may read), the runner's
+          # own registration files and logs, and .git folders under the working
+          # directory, which includes the prompts checkout (the App token is
+          # in the origin URL). Claude Code applies Read rules to Grep and Glob
+          # on a best-effort basis. The prompts checkout keeps no token on disk.
+          #
+          # The action also runs Claude with acceptEdits, which approves some
+          # shell file commands without a rule naming them. A reviewer needs
+          # none, so --permission-mode default replaces it; the action's own
+          # flag comes first and a later single-value flag wins.
+          use_commit_signing: true
+          claude_args: >-
+            --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*),Read(//proc/**),Read(~/.claude/**),Read(~/.config/**),Read(~/.ssh/**),Read(~/.docker/**),Read(~/.git-credentials),Read(~/.gitconfig),Read(~/.aws/**),Read(~/.kube/**),Read(~/.azure/**),Read(~/.gnupg/**),Read(~/.npmrc),Read(~/.netrc),Read(~/.pypirc),Read(//**/_temp/_runner_file_commands/**),Read(//**/_temp/git-credentials-*),Read(//**/.credentials),Read(//**/.credentials_rsaparams),Read(//**/.runner),Read(//**/_diag/**),Read(**/.git/**)" --permission-mode default
+
+      - name: Check the reviewer changed no files
+        # A tripwire, not a proof: it sees tracked and untracked changes in the
+        # checkout, such as an edit some future change lets through. It does
+        # not see the excluded paths, ignored files, or anything outside the
+        # checkout. claude-code-action restores these paths from the base
+        # branch on pull requests and leaves them modified on purpose
+        # (SENSITIVE_PATHS in its restore-config.ts), and the prompts checkout
+        # lives inside the workspace, so all are excluded.
+        if: always()
+        run: |
+          set -euo pipefail
+          changes=$(git status --porcelain -- . \
+            ':(exclude).claude-review-action' \
+            ':(exclude).claude' ':(exclude).mcp.json' ':(exclude).claude.json' \
+            ':(exclude).gitmodules' ':(exclude).ripgreprc' ':(exclude).husky' \
+            ':(exclude)CLAUDE.md' ':(exclude)CLAUDE.local.md')
+          if [ -n "$changes" ]; then
+            echo "::error::The review step changed files in the checkout; a reviewer must not write"
+            printf '%s\n' "$changes"
+            exit 1
+          fi
 
       - name: Notify Slack
         if: always() && inputs.slack_notify && github.event_name == 'pull_request'
@@ -156,5 +220,5 @@ jobs:
           webhook_url: ${{ secrets.slack_webhook_url }}
           message: |
             🤖 *Claude* reviewed PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
-            Repo: ${{ github.repository }} | Status: ${{ steps.claude-review.outcome == 'success' && '✅ Completed' || '❌ Failed' }}
+            Repo: ${{ github.repository }} | Status: ${{ job.status == 'success' && '✅ Completed' || '❌ Failed' }}
             <${{ github.event.pull_request.html_url }}|View PR>

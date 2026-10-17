@@ -13,8 +13,16 @@ jobs:
   parser:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Gemini reply parser (#8)
         run: python3 scripts/test_gemini_review_parse.py
       - name: Gemini comment builder (#8)
         run: python3 scripts/test_gemini_review_comment.py
+      - name: Gemini payload caps (#29)
+        run: python3 scripts/test_gemini_payload.py
+      - name: Gemini review merge (#30)
+        run: python3 scripts/test_gemini_review_merge.py
+      - name: Gemini parallel calls (#30)
+        run: python3 scripts/test_gemini_calls.py
+      - name: Safe extras path (#35)
+        run: python3 scripts/test_safe_path.py

@@ -2,8 +2,10 @@
 
 Reusable GitHub Actions workflows for running AI code review on every pull request. Two parallel reviewers, severity-rated findings, optional Slack notification.
 
-- **Claude** — via [`anthropics/claude-code-action@v1`](https://github.com/anthropics/claude-code-action). OAuth-authed; posts inline review comments and a top-level summary.
+- **Claude** — via [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action), pinned to the v1.0.251 commit. OAuth-authed; posts inline review comments and a top-level summary.
 - **Gemini** — direct call to the Gemini 2.5 API. Posts a single comment with severity-tagged findings rendered from a JSON response.
+
+Every third-party action in the reusable workflows is pinned to a full commit SHA, with its version in a trailing comment. A tag can be moved by whoever controls the upstream repo, and these steps hold the caller's tokens. Dependabot (`.github/dependabot.yml`) opens a weekly pull request when a pinned action has a newer release.
 
 Both reviewers load:
 
@@ -88,6 +90,16 @@ jobs:
 
 That's the entire integration. Updates to the prompts in this central repo propagate to every consumer on the next PR.
 
+### Do not switch the trigger to `pull_request_target`
+
+On a public repo, pull requests from forks get no secrets under `pull_request`, so both reviewers fail for outside contributors. `pull_request_target` would run with your secrets and a write token while the model reads the fork's content, which lets anyone who opens a pull request steer a job holding your Claude token and Gemini key. Both workflows therefore run only on `pull_request` and comment events: a caller switched to `pull_request_target` gets a skipped review. Do not copy the workflows and loosen that guard.
+
+A maintainer's `@claude` comment on a fork's pull request also runs with secrets, and Claude reads the fork's files; `@gemini` sends the fork's diff. Read the pull request before asking for a review on it.
+
+### The Claude reviewer and your `.claude/settings.json`
+
+The Claude reviewer runs with no permission to edit files, commit or push, and with reads denied for the places on a runner known to hold credentials: process environments, `.git` folders, credential files in the home folder, the runner's workflow command and credential files, and the runner's own registration files. These are deny rules, and deny rules win, but they name specific commands and paths rather than fencing Claude into the checkout, so they cover the known places, not every place. Claude also applies your repo's `.claude/settings.json` and `.mcp.json` as they are on the pull request's base branch; a pull request cannot change them. Do not allow broad commands there, such as `Bash(git:*)`, `Bash(curl:*)` or `Bash(gh:*)`: a rule like that hands back a way to write or to send data out that the deny list does not name, for example `git -C . push`. On a self-hosted runner, keep other credentials off the machine, or in places this list names.
+
 ### Mentioning the bots
 
 Both reviewers re-trigger when their handle is mentioned in a PR comment:
@@ -102,7 +114,7 @@ The `if:` guard inside each reusable workflow handles the routing — there's no
 The stack prompts (`prompts/<stack>.md`) describe the **stack**, not your specific codebase. To layer in repo-specific conventions (custom guard names, internal paths, threshold tunings, project-specific lint rules), use one of:
 
 - **`extra_prompt: <inline string>`** — for short notes. Multi-line YAML strings get awkward beyond a paragraph.
-- **`extra_prompt_path: <path>`** — points at a markdown file inside the consumer repo (e.g. `.github/review-extras.md`). Read at workflow-run time and appended under a "Repo-specific notes" heading. Cleanest for long-form additions; the file lives in the consumer repo so a PR that changes both the code conventions and the review prompt for them is atomic.
+- **`extra_prompt_path: <path>`** — points at a markdown file inside the consumer repo (e.g. `.github/review-extras.md`). Read at workflow-run time and appended under a "Repo-specific notes" heading. A symlink, or a path that resolves outside the checkout or into `.git`, is skipped with a warning, because the file comes from the pull request. Cleanest for long-form additions; the file lives in the consumer repo so a PR that changes both the code conventions and the review prompt for them is atomic.
 
 If both are set, file contents render first, then the inline string — both under one "Repo-specific notes" section.
 
@@ -125,10 +137,10 @@ Example `.github/review-extras.md` in a consumer repo:
 |---|---|---|---|
 | `stack` | string | (required) | Prompt template name in `prompts/<stack>.md` |
 | `runner` | string (JSON) | `"ubuntu-latest"` | `runs-on` value, JSON-encoded |
-| `ref` | string | `v1` | Pinned ref of this central repo for prompts |
+| `ref` | string | `v1` | Ref of this repo to load prompts, scripts and the Slack action from. `v1` moves with releases; a caller that pins the workflow to a commit SHA should set `ref` to the same SHA |
 | `slack_notify` | boolean | `false` | Post a Slack message on completion |
 | `extra_prompt` | string | `''` | Inline repo-specific addendum |
-| `extra_prompt_path` | string | `''` | Path (in consumer repo) to a markdown file appended after the stack prompt |
+| `extra_prompt_path` | string | `''` | Path (in consumer repo) to a markdown file appended after the stack prompt. Symlinks and paths outside the checkout or in `.git` are skipped |
 
 ### Gemini (`gemini-review.yml`)
 
@@ -136,10 +148,14 @@ All Claude inputs above, plus:
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `model` | string | `gemini-2.5-flash` | Gemini model ID |
-| `max_total_lines` | number | `5000` | Cap on total source lines sent to Gemini |
-| `max_per_file` | number | `1000` | Skip files larger than this |
-| `max_files` | number | `20` | Cap on file count |
+| `model` | string | `gemini-4-argon` | Gemini model ID. Set `gemini-3.8-flash` for a cheaper review |
+| `thinking_level` | string | `high` | `minimal`, `low`, `medium`, `high`, or `none` (or empty) to send no thinking setting. `gemini-4-argon` does not think unless asked. Ignored for `gemini-1.x` and `gemini-2.x` models, which do not take it |
+| `max_total_lines` | number | `20000` | Source lines per Gemini call |
+| `max_per_file` | number | `3000` | Skip files larger than this |
+| `max_files` | number | `50` | Files per Gemini call |
+| `max_diff_lines` | number | `5000` | Diff lines per Gemini call |
+| `max_payload_bytes` | number | `2000000` | Diff plus source bytes per Gemini call, for files with very long lines |
+| `max_chunks` | number | `3` | A pull request over the per-call caps is split into up to this many parallel calls (1 to 5); findings merge into one comment. Each call is billed, so a large pull request can cost up to this many times a single review. Set `1` for one call |
 
 ## Secrets required
 
