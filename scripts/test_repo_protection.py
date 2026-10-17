@@ -110,6 +110,8 @@ created = {r["name"]: r for r in end["rulesets"]}
 check("3 --apply creates each missing ruleset exactly as declared, exit 0",
       p.returncode == 0 and set(created) == {r["name"] for r in arp.RULESETS}
       and all(arp.normal(created[r["name"]]) == arp.normal(r) for r in arp.RULESETS), p.stdout)
+check("3 and the read-back pass writes nothing: exactly one POST per ruleset, then an after section",
+      [c[c.index("-X") + 1] for c in writes(calls)] == ["POST", "POST"] and "after:" in p.stdout, writes(calls))
 
 for label, mutate, field in [
     ("bypass removed", lambda r: r[0].update(bypass_actors=[]), "bypass_actors"),
