@@ -87,6 +87,8 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
             return self.send(API_STATE["status"], {"message": "boom"})
         if self.path == "/repos/o/r/pulls/1":
             return self.send(200, {"base": {"sha": BASE_SHA}})
+        if self.path == "/repos/o/r":
+            return self.send(200, {"default_branch": "main"})  # its contents (?ref=main) answer 404 below
         prefix, suffix = "/repos/o/r/contents/", f"?ref={BASE_SHA}"
         if self.path.startswith(prefix) and self.path.endswith(suffix):
             text = API_STATE["files"].get(self.path[len(prefix):-len(suffix)])
@@ -192,6 +194,43 @@ def parse_outputs(text):
         i += 1
     return outputs
 
+
+print("the checkout path rule gemini_chunks.py reads files through (safe_path.readable)")
+sys.path.insert(0, str(HERE))
+import safe_path  # noqa: E402
+
+def rule(layout, path):
+    work = pathlib.Path(tempfile.mkdtemp()); outside = pathlib.Path(tempfile.mkdtemp())
+    (outside / "secret.txt").write_text(OUTSIDE)
+    (work / ".git").mkdir(); (work / ".git/config").write_text(TOKEN)
+    layout(work, outside)
+    here = os.getcwd(); os.chdir(work)
+    try:
+        return safe_path.readable(path), safe_path.main(path)
+    finally:
+        os.chdir(here); shutil.rmtree(work); shutil.rmtree(outside)
+
+def mk(*files):
+    def layout(work, outside):
+        for f in files:
+            (work / f).parent.mkdir(parents=True, exist_ok=True); (work / f).write_text("x")
+    return layout
+
+cases = [
+    ("35.1 a plain file", mk("a.py"), "a.py", None, 0),
+    ("35.2 a link to .git/config", lambda w, o: (w / "l.py").symlink_to(w / ".git/config"), "l.py", "a symlink, not read", 1),
+    ("35.3 a link outside", lambda w, o: (w / "l.py").symlink_to(o / "secret.txt"), "l.py", "a symlink, not read", 1),
+    ("35.5 a path under a linked folder that leads out", lambda w, o: (w / "rules").symlink_to(o), "rules/secret.txt", "outside the checkout, not read", 1),
+    ("35.7 a folder", lambda w, o: (w / "d").mkdir(), "d", None, 1),
+    ("35.14 .GIT in another case", lambda w, o: (w / ".GIT").mkdir(exist_ok=True) or (w / ".GIT/config").write_text("t"), ".GIT/config", "inside .git, not read", 1),
+    ("35.15 a nested .git", mk("vendored/.git/config"), "vendored/.git/config", "inside .git, not read", 1),
+    ("35.15 .git/config named directly", lambda w, o: None, ".git/config", "inside .git, not read", 1),
+    ("35.15 a ../ path", lambda w, o: None, "../secret.txt", "outside the checkout, not read", 1),
+    ("35.15 an absolute path outside", lambda w, o: None, "/etc/hosts", "outside the checkout, not read", 1),
+]
+for label, layout, path, want_reason, want_rc in cases:
+    reason, rc = rule(layout, path)
+    check(f"{label}: {want_reason or ('readable' if want_rc == 0 else 'not a regular file')}", reason == want_reason and rc == want_rc, (reason, rc))
 
 print("job guards")
 for wf in ("claude-review.yml", "gemini-review.yml"):

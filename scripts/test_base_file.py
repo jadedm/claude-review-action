@@ -51,6 +51,14 @@ class FakeGitHub(http.server.BaseHTTPRequestHandler):
             return self.send(STATE["status"], {"message": "boom"})
         if self.path == "/repos/o/r/pulls/7" and not STATE.get("no_pr"):
             return self.send(200, {"base": {"sha": BASE}, "head": {"sha": "h" * 40}})
+        if self.path == "/repos/o/r":
+            return self.send(200, {"default_branch": "main"})
+        if self.path == "/repos/o/r/redirect":
+            self.send_response(302); self.send_header("Location", STATE["redirect_to"]); self.end_headers(); return
+        dprefix, dsuffix = "/repos/o/r/contents/", "?ref=main"
+        if self.path.startswith(dprefix) and self.path.endswith(dsuffix):
+            item = STATE.get("default_files", {}).get(self.path[len(dprefix):-len(dsuffix)])
+            return self.send(200, item) if item is not None else self.send(404, {"message": "Not Found"})
         prefix = "/repos/o/r/contents/"
         if self.path.startswith(prefix) and self.path.endswith(f"?ref={BASE}"):
             key = self.path[len(prefix):-len(f"?ref={BASE}")]
@@ -71,8 +79,8 @@ def file_item(text):
     return {"type": "file", "encoding": "base64", "size": len(raw), "content": base64.b64encode(raw).decode()}
 
 
-def run(path, files=None, status=None, no_pr=False, out=None):
-    STATE.update(files=files or {}, status=status, requests=[], no_pr=no_pr)
+def run(path, files=None, status=None, no_pr=False, out=None, default_files=None):
+    STATE.update(files=files or {}, status=status, requests=[], no_pr=no_pr, default_files=default_files or {})
     out = out or pathlib.Path(tempfile.mkdtemp()) / "extras.md"
     env = dict(os.environ, GH_TOKEN="tok", GITHUB_API_URL=API)
     p = subprocess.run([sys.executable, "-I", str(SCRIPT), "o/r", "7", path, str(out)], capture_output=True, text=True, env=env)
@@ -91,9 +99,9 @@ p, text = run(".github/review-extras.md")
 check("37.2 not on the base branch: warning, nothing written, exit 0",
       p.returncode == 0 and text is None and "::warning::" in p.stdout and "not on the base branch" in p.stdout, (p.returncode, p.stdout))
 p, text = run(".github/review-extras.md", {".github/review-extras.md": {"type": "symlink", "target": "../.git/config"}})
-check("37.3 a link that is not a file on the base branch: the step fails", p.returncode == 1 and text is None and "symlink on the base branch" in p.stdout, p.stdout)
+check("37.3 a link that is not a file on the base branch: the step fails", p.returncode == 1 and text is None and "symlink on the base commit" in p.stdout, p.stdout)
 p, text = run(".github/rules", {".github/rules": [{"type": "file", "name": "a.md"}]})
-check("37.3 a folder on the base branch: the step fails", p.returncode == 1 and text is None and "a folder on the base branch" in p.stdout, p.stdout)
+check("37.3 a folder on the base branch: the step fails", p.returncode == 1 and text is None and "a folder on the base commit" in p.stdout, p.stdout)
 big = {"type": "file", "encoding": "none", "size": 5_000_000, "content": ""}
 p, text = run("big.md", {"big.md": big})
 check("37.3 too large: the step fails", p.returncode == 1 and text is None and "too large" in p.stdout, p.stdout)
@@ -112,6 +120,32 @@ stale = pathlib.Path(tempfile.mkdtemp()) / "extras.md"
 stale.write_text("STALE RULES FROM AN EARLIER RUN\n")
 p, text = run(".github/review-extras.md", out=stale)
 check("37.9 an earlier run's output file is removed when the base has none", p.returncode == 0 and text is None and not stale.exists(), (p.stdout, text))
+
+p, text = run(".github/review-extras.md", default_files={".github/review-extras.md": file_item("DEFAULT RULES\n")})
+check("37.11 missing on the base (a PR retargeted to a branch without it): the default branch's rules are used",
+      p.returncode == 0 and text == "DEFAULT RULES\n" and "default branch" in p.stdout, (p.stdout, text))
+p, text = run(".github/review-extras.md")
+check("37.11 missing on both: skipped with a warning naming both", p.returncode == 0 and text is None and "nor on the default branch" in p.stdout, p.stdout)
+
+# The token must not follow a redirect; urllib on 3.9 would carry Authorization along.
+seen = {}
+class Catch(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        seen["auth"] = self.headers.get("Authorization")
+        self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+other = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Catch)
+threading.Thread(target=other.serve_forever, daemon=True).start()
+code = (f"import sys; sys.path.insert(0, {str(HERE)!r}); import os; os.environ['GH_TOKEN']='tok'; "
+        f"os.environ['GITHUB_API_URL']={API!r}; import base_file; base_file.api('/repos/o/r/redirect')")
+STATE["redirect_to"] = f"http://127.0.0.1:{other.server_address[1]}/elsewhere"
+p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+check("37.12 a redirect is refused and the token never reaches the other host", p.returncode != 0 and seen.get("auth") is None, (p.returncode, seen, p.stderr[-200:]))
+other.shutdown()
+p = subprocess.run([sys.executable, "-I", str(SCRIPT), "o/r"], capture_output=True, text=True, env=dict(os.environ, GH_TOKEN="t", GITHUB_API_URL=API))
+check("37.13 too few arguments: an ::error:: line, no traceback", p.returncode == 1 and "::error::" in p.stdout and "Traceback" not in p.stderr, (p.stdout, p.stderr[-200:]))
+p, text = run(".github/review-extras.md", {".github/review-extras.md": {"type": "file", "encoding": "base64", "size": None, "content": ""}})
+check("37.13 a malformed API reply: an ::error:: line, no traceback", p.returncode == 1 and "::error::" in p.stdout and "Traceback" not in p.stderr, (p.stdout, p.stderr[-200:]))
 
 server.shutdown()
 print(f"\n{passed} passed, {failed} failed")
