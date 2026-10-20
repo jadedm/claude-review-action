@@ -89,6 +89,14 @@ check("R2 every default in the README equals the workflow's", not wrong, wrong)
 mistyped = [(k, t, TYPES["gemini-review.yml"].get(k)) for k, t in README_TYPES.items() if t != TYPES["gemini-review.yml"].get(k)]
 mistyped += [(k, README_TYPES[k], t) for k, t in TYPES["claude-review.yml"].items() if README_TYPES.get(k) != t]
 check("R2 every type in the README equals the workflow's", not mistyped, mistyped)
+vertex_in, vertex_sec = workflow_call("gemini-review-vertex.yml")
+vertex_only = readme_table("`gemini-review-vertex.yml` only")
+check("B12 the Vertex table lists exactly the inputs gemini-review-vertex.yml adds", set(vertex_only) == set(vertex_in) - set(gemini_in),
+      (sorted(vertex_only), sorted(set(vertex_in) - set(gemini_in))))
+check("B12 the Vertex workflow takes the Gemini inputs except provider, as the README says",
+      set(vertex_in) - set(vertex_only) == set(gemini_in) - {"provider"}, sorted(set(vertex_in) ^ set(gemini_in)))
+check("B12 its only secret is the Slack webhook, and vertex_project is required there",
+      vertex_sec == ["slack_webhook_url"] and vertex_in.get("vertex_project") == "required", (vertex_sec, vertex_in.get("vertex_project")))
 named = set(re.findall(r"\| `([a-z_]+)`(?:, optional)? \|", README.split("## Secrets", 1)[1].split("\n## ", 1)[0]))
 check("R2 the secrets table names exactly the workflows' secrets", named == set(claude_sec) | set(gemini_sec), (named, claude_sec, gemini_sec))
 

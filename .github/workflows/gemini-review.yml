@@ -355,6 +355,9 @@ jobs:
           THINKING_LEVEL: ${{ inputs.thinking_level }}
           PROVIDER: ${{ inputs.provider }}
           API_URL: ${{ steps.provider.outputs.api_url }}
+          # key sends GEMINI_API_KEY as X-goog-api-key; bearer sends it as an
+          # OAuth access token (gemini-review-vertex.yml, #55).
+          AUTH_SCHEME: key
         run: |
           set -euo pipefail
           PROMPT=$(cat /tmp/review-prompt.txt)
@@ -365,6 +368,11 @@ jobs:
             SERVICE="Vertex AI" ROLE='"role": "user", ' LEVEL=$(printf '%s' "$THINKING_LEVEL" | tr '[:lower:]' '[:upper:]')
           fi
           if [ -z "$API_URL" ]; then echo "::error::no API URL; the Check the provider step did not run"; exit 1; fi
+          case "$AUTH_SCHEME" in
+            key) AUTH_HEADER="X-goog-api-key: ${GEMINI_API_KEY}" ;;
+            bearer) AUTH_HEADER="Authorization: Bearer ${GEMINI_API_KEY}" ;;
+            *) echo "::error::AUTH_SCHEME must be key or bearer, got '${AUTH_SCHEME}'"; exit 1 ;;
+          esac
           # Only a known level reaches the request body, so the input cannot add JSON.
           # gemini-4-argon does no thinking unless asked; with high it found the most
           # defects and no false ones in a blind comparison (jadedm/sandbox#101).
@@ -411,7 +419,7 @@ jobs:
               http=$(curl -s -w "%{http_code}" -o "$result" \
                 "$API_URL" \
                 -H 'Content-Type: application/json' \
-                -H "X-goog-api-key: ${GEMINI_API_KEY}" \
+                -H "$AUTH_HEADER" \
                 --max-time 420 \
                 -X POST \
                 -d @- <<CURL_EOF

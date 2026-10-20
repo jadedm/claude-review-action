@@ -117,25 +117,55 @@ What this repo does not do yet: review only the commits since the last review, e
 
 AI Studio stops calls when a billing account reaches its [tier's monthly spend cap](https://aistudio.google.com/docs/billing#tier-spend-caps). Vertex AI bills the same models to a Google Cloud project instead. Locations are `global` or a region; the multi-region names `us` and `eu` are not accepted.
 
-1. Create a key restricted to the Vertex AI API and bound to a service account whose only permission is `aiplatform.endpoints.predict`, the one `generateContent` needs. [`scripts/create_vertex_key.sh`](scripts/create_vertex_key.sh) prints what it would do; `--apply` does it and writes the key to a file without printing it:
+### With no stored key (recommended)
+
+`gemini-review-vertex.yml` signs in with the job's GitHub OIDC token, exchanged for a short-lived token of a service account whose only permission is `aiplatform.endpoints.predict`. It is generated from `gemini-review.yml` by [`scripts/render_vertex_workflow.py`](scripts/render_vertex_workflow.py), so the review steps are the same.
+
+1. Set up Google Cloud. [`scripts/setup_vertex_wif.sh`](scripts/setup_vertex_wif.sh) prints what it would create; `--apply` creates it and prints the two values the caller needs. It admits a token only from `gemini-review-vertex.yml` at a release tag, called from one of the listed repositories:
 
    ```bash
-   scripts/create_vertex_key.sh --project YOUR_PROJECT_ID --apply
-   test -s /tmp/.vertex-gemini && gh secret set GEMINI_VERTEX_API_KEY --repo OWNER/REPO < /tmp/.vertex-gemini
+   scripts/setup_vertex_wif.sh --project YOUR_PROJECT_ID --repos OWNER/REPO --apply
    ```
 
-2. In `gemini.yml`:
+2. Replace `gemini.yml`'s job. The caller must grant `id-token: write` itself, because a called workflow cannot raise its caller's permissions:
 
    ```yaml
+   permissions:
+     contents: read
+     pull-requests: write
+     id-token: write
+
+   jobs:
+     review:
+       uses: jadedm/pr-review-workflows/.github/workflows/gemini-review-vertex.yml@v1
        with:
          stack: python
-         provider: vertex
          vertex_project: YOUR_PROJECT_ID
-       secrets:
-         gemini_api_key: ${{ secrets.GEMINI_VERTEX_API_KEY }}
+         workload_identity_provider: projects/NUMBER/locations/global/workloadIdentityPools/github-pr-review/providers/github
+         service_account: pr-review-vertex@YOUR_PROJECT_ID.iam.gserviceaccount.com
    ```
 
-No permission changes: the key goes in the same secret slot, so the caller's `permissions:` block stays as in the quickstart.
+Pull requests from forks get no OIDC token, so the review fails on them, as it does without secrets.
+
+### With a key
+
+`gemini-review.yml` with `provider: vertex` sends a Google Cloud API key instead. Vertex AI accepts only a key bound to a service account (an unbound key gets HTTP 401), and some organisations' `iam.managed.disableServiceAccountApiKeyCreation` policy refuses those for Vertex AI until `aiplatform.googleapis.com` is in its allowed services ([`scripts/allow_vertex_api_keys.sh`](scripts/allow_vertex_api_keys.sh) adds it, given organisation rights).
+
+```bash
+scripts/create_vertex_key.sh --project YOUR_PROJECT_ID --apply
+test -s /tmp/.vertex-gemini && gh secret set GEMINI_VERTEX_API_KEY --repo OWNER/REPO < /tmp/.vertex-gemini
+```
+
+```yaml
+    with:
+      stack: python
+      provider: vertex
+      vertex_project: YOUR_PROJECT_ID
+    secrets:
+      gemini_api_key: ${{ secrets.GEMINI_VERTEX_API_KEY }}
+```
+
+The caller's `permissions:` block stays as in the quickstart.
 
 ## Repo-specific rules
 
@@ -182,6 +212,17 @@ If both are set, the file comes first. Claude also reads the repo's `CLAUDE.md` 
 | `max_diff_lines` | number | `5000` | Diff lines per call |
 | `max_payload_bytes` | number | `2000000` | Diff plus source bytes per call |
 | `max_chunks` | number | `3` | Calls a large pull request is split into (1 to 5). Set `1` for one call |
+
+### `gemini-review-vertex.yml` only
+
+It takes the Gemini inputs above except `provider`, needs no `gemini_api_key`, and adds:
+
+| Input | Type | Default | Description |
+|---|---|---|---|
+| `workload_identity_provider` | string | required | Resource name of the workload identity provider that trusts GitHub; `setup_vertex_wif.sh` prints it |
+| `service_account` | string | required | Service account the job signs in as |
+
+`vertex_project` is required there.
 
 ## Secrets
 

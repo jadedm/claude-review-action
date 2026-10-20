@@ -104,7 +104,7 @@ AI_STUDIO_URL = "https://generativelanguage.googleapis.com/v1beta/models/m:gener
 VERTEX_URL = "https://aiplatform.googleapis.com/v1/projects/proj-55/locations/global/publishers/google/models/m:generateContent"
 
 
-def run_calls(chunk_names, thinking="high", model="m", plant=None, provider="ai_studio", api_url=AI_STUDIO_URL):
+def run_calls(chunk_names, thinking="high", model="m", plant=None, provider="ai_studio", api_url=AI_STUDIO_URL, auth="key"):
     """chunk_names: one list of file names per call. Returns (proc, review, coverage, seconds).
     The request bodies the stub received are in BODIES after the call."""
     shutil.rmtree(CHUNKS, ignore_errors=True)
@@ -132,7 +132,7 @@ def run_calls(chunk_names, thinking="high", model="m", plant=None, provider="ai_
     pathlib.Path("/tmp/review-prompt.txt").write_text("Review this.\n")
     pathlib.Path("/tmp/review-coverage.json").write_text(json.dumps({"omitted": [], "filtered": 0, "diff_sent": 0, "diff_total": 0}))
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GEMINI_API_KEY="k-SECRET-55", GEMINI_MODEL=model, STUB_STATE=str(state),
-               THINKING_LEVEL=thinking, PROVIDER=provider, API_URL=api_url)
+               THINKING_LEVEL=thinking, PROVIDER=provider, API_URL=api_url, AUTH_SCHEME=auth)
     start = time.monotonic()
     proc = subprocess.run(["bash", "-e", "-c", CALL], cwd=work, env=env, capture_output=True, text=True)
     seconds = time.monotonic() - start
@@ -274,6 +274,18 @@ check("55.7 three chunks on vertex: every request goes to the Vertex URL",
       len(ARGV) == 3 and all(VERTEX_URL in a and AI_STUDIO_URL not in a for a in ARGV), [a[:3] for a in ARGV])
 proc, review, cov, secs = run_calls([["fail403.py"], ["timeout.py"]], provider="vertex", api_url=VERTEX_URL)
 check("55.8 the key is never in the log, on success or error", "k-SECRET-55" not in proc.stdout + proc.stderr, proc.stdout[-300:])
+proc, review, cov, secs = run_calls([["plain.py"]], provider="vertex", api_url=VERTEX_URL, auth="bearer")
+check("B4 bearer: Authorization Bearer is sent and no X-goog-api-key",
+      proc.returncode == 0 and ARGV and "Authorization: Bearer k-SECRET-55" in ARGV[0] and not any("X-goog-api-key" in a for a in ARGV[0]),
+      ARGV[:1])
+for bad in ("typo", "", "Bearer"):
+    proc, review, cov, secs = run_calls([["plain.py"]], auth=bad)
+    check(f"B16 AUTH_SCHEME {bad!r}: fails before any call", proc.returncode != 0 and BODIES == [] and "AUTH_SCHEME must be" in proc.stdout,
+          (proc.returncode, proc.stdout[-200:]))
+proc, review, cov, secs = run_calls([["fail403.py"], ["plain.py"]], provider="vertex", api_url=VERTEX_URL, auth="bearer")
+check("B8 a bearer token is never in the log", "k-SECRET-55" not in proc.stdout + proc.stderr, proc.stdout[-300:])
+wf = WORKFLOW.read_text()
+check("B3 gemini-review.yml sends the key header by default", "          AUTH_SCHEME: key" in wf and "AUTH_SCHEME: bearer" not in wf)
 proc, review, cov, secs = run_calls([["plain.py"]], api_url="")
 check("55.3 no API URL (the check step did not run): fails before any call",
       proc.returncode != 0 and BODIES == [] and "no API URL" in proc.stdout, (proc.returncode, proc.stdout[-200:]))
