@@ -111,6 +111,78 @@ p, posted, output = run(["a.py", "b.py", ".github/workflows/claude.yml", "c.py"]
 check("15.8 counts are summed across pages: a workflow file on page 2 and the marker on page 2 are both seen",
       posted == [] and "changes a file under" in p.stdout, (p.stdout, posted))
 
+def step(path, name):
+    text = path.read_text().splitlines()
+    if f"      - name: {name}" not in text:
+        return -1, -1, [], ""
+    at = text.index(f"      - name: {name}")
+    stop = next(i for i in range(at + 1, len(text)) if text[i].startswith("      - name:"))
+    body = text[at:stop]
+    run_from = body.index("        run: |")
+    return at, stop, body, "\n".join(body[run_from + 1:]).rstrip()
+
+
+install_at, install_end, install, install_run = step(WORKFLOW, "Install GitHub CLI")
+check("50.1 gh is installed directly before the notice", install_end == start, (install_at, install_end, start))
+install_if = next((l.strip() for l in install if l.strip().startswith("if:")), None)
+check("50.2 the install runs only when the notice does", install_if == IF, (install_if, IF))
+_, _, _, gemini_run = step(WORKFLOW.parent / "gemini-review.yml", "Install GitHub CLI")
+check("50.3 the install script is the Gemini workflow's, text for text",
+      install_run == gemini_run and "dnf install -y gh" in install_run, install_run[:200])
+
+# Runs the real install script with PATH holding only stubs, which log each call
+# instead of touching the machine. `dnf install -y gh` and `apt-get install -y gh`
+# create a gh stub, as a real install would.
+INSTALL = "\n".join(l[10:] for l in install_run.splitlines()) + "\n"
+LOGGER = '#!/bin/bash\necho "$(basename "$0") $*" >> "$STUB_LOG"\n'
+MAKES_GH = LOGGER + 'if [ "$*" = "install -y gh" ]; then printf "#!/bin/bash\\n" > "$STUB_BIN/gh"; chmod +x "$STUB_BIN/gh"; fi\n'
+
+
+def run_install(gh=False, dnf=False, apt=False, dnf5=False, curl_fails=False):
+    work = pathlib.Path(tempfile.mkdtemp())
+    bin_ = work / "bin"
+    bin_.mkdir()
+    stubs = {
+        "sudo": LOGGER + 'exec "$@"\n',
+        "install": LOGGER, "tee": LOGGER + "cat > /dev/null\n", "dpkg": LOGGER + "echo amd64\n",
+        "curl": LOGGER + ("exit 22\n" if curl_fails else 'while [ $# -gt 1 ]; do [ "$1" = -o ] && echo key > "$2"; shift; done\n'),
+    }
+    if gh:
+        stubs["gh"] = "#!/bin/bash\n"
+    if dnf:
+        stubs["dnf"] = MAKES_GH + ('if [ "$1 $2" = "config-manager --add-repo" ]; then exit 2; fi\n' if dnf5 else "")
+    if apt:
+        stubs["apt-get"] = MAKES_GH
+    for name, body in stubs.items():
+        (bin_ / name).write_text(body)
+        (bin_ / name).chmod(0o755)
+    for tool in ("mktemp", "rm", "basename", "cat", "chmod"):
+        (bin_ / tool).symlink_to(shutil.which(tool))
+    log = work / "log"
+    log.touch()
+    env = {"PATH": str(bin_), "STUB_LOG": str(log), "STUB_BIN": str(bin_), "HOME": str(work)}
+    p = subprocess.run([shutil.which("bash"), "-e", "-c", INSTALL], cwd=work, env=env, capture_output=True, text=True)
+    calls = log.read_text().splitlines()
+    shutil.rmtree(work)
+    return p, calls
+
+
+p, calls = run_install(gh=True, dnf=True, apt=True)
+check("50.4 gh already there: no package manager is touched", p.returncode == 0 and calls == [], (p.returncode, calls))
+p, calls = run_install(dnf=True)
+check("50.5 gh missing, dnf: gh installed, step green", p.returncode == 0 and "dnf install -y gh" in calls, (p.returncode, calls, p.stderr[-300:]))
+p, calls = run_install(dnf=True, dnf5=True)
+check("50.6 dnf5 without --add-repo: falls back to addrepo, gh installed",
+      p.returncode == 0 and any("addrepo --from-repofile=" in c for c in calls) and "dnf install -y gh" in calls, (p.returncode, calls))
+p, calls = run_install(apt=True)
+check("50.7 gh missing, apt: keyring installed from the checked download, gh installed",
+      p.returncode == 0 and any(c.startswith("install -m 0644") for c in calls) and "apt-get install -y gh" in calls, (p.returncode, calls, p.stderr[-300:]))
+p, calls = run_install(apt=True, curl_fails=True)
+check("50.8 keyring download fails: step red, no keyring or apt source written",
+      p.returncode != 0 and not any(c.startswith(("install ", "tee ")) for c in calls), (p.returncode, calls))
+p, calls = run_install()
+check("50.9 no gh and no dnf or apt-get: step red and says why", p.returncode != 0 and "::error::gh is not installed" in p.stdout, (p.returncode, p.stdout))
+
 import re
 filters = re.findall(r"--jq (\"[^\n]*\"|'[^\n]*')", SCRIPT)
 if shutil.which("jq") and len(filters) == 2:
