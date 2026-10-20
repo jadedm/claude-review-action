@@ -175,8 +175,8 @@ jobs:
       - name: Checkout review action repo (prompts)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # This workflow's own repository and commit unless the caller names a
-          # ref (#25), so a fork's workflow loads the fork's prompts. job.workflow_*
+          # This workflow's own repository and commit, always: there is no ref
+          # input here, so a fork's workflow loads the fork's prompts. job.workflow_*
           # is empty on GitHub Enterprise Server; v1 here is the old default, not
           # this repo's default branch.
           repository: ${{ job.workflow_repository || 'jadedm/pr-review-workflows' }}

@@ -148,7 +148,7 @@ AI Studio stops calls when a billing account reaches its [tier's monthly spend c
          service_account: pr-review-vertex@YOUR_PROJECT_ID.iam.gserviceaccount.com
    ```
 
-A `pull_request` run from a fork gets no OIDC token, so the review fails on it, as it does without secrets. An `@gemini` comment on a fork's pull request runs in your repository and does get one; nothing in the job runs the fork's files, but read the pull request before asking. The workflow has no `ref` input: its scripts always come from its own commit, because any step in a job holding `id-token: write` can ask for a token.
+A `pull_request` run from a fork gets no OIDC token, so the review fails on it, as it does without secrets. An `@gemini` comment on a fork's pull request runs in your repository and does get one; nothing in the job runs the fork's files, but read the pull request before asking. The workflow has no `ref` input: its scripts always come from its own commit, because any step in a job holding `id-token: write` can ask for a token. For the same reason, on a self-hosted runner use ephemeral runners: a persistent machine can carry a tool left behind by an earlier job into this one.
 
 ### With a key
 

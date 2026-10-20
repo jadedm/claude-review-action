@@ -85,6 +85,10 @@ CHANGES = [
         default: ''
 """, "", 1),
     ("          ref: ${{ inputs.ref || job.workflow_sha || 'v1' }}\n", "          ref: ${{ job.workflow_sha || 'v1' }}\n", 1),
+    ("""          # This workflow's own repository and commit unless the caller names a
+          # ref (#25), so a fork's workflow loads the fork's prompts.""",
+     """          # This workflow's own repository and commit, always: there is no ref
+          # input here, so a fork's workflow loads the fork's prompts.""", 1),
     ("""permissions:
   contents: read
   pull-requests: write
