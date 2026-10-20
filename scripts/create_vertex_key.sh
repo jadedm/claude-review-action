@@ -38,16 +38,17 @@ role="projects/${project}/roles/${role_id}"
 
 enabled() {
   local list
-  list=$(gcloud services list --project "$project" --enabled --format='value(config.name)')
-  grep -qx "$1" <<<"$list" && echo enabled || echo disabled
+  # A failed lookup must not read as "disabled": -e is off inside $( ).
+  list=$(gcloud services list --project "$project" --enabled --format='value(config.name)') || return 1
+  if grep -qx "$1" <<<"$list"; then echo enabled; else echo disabled; fi
 }
 
 state() {
   local account billing vertex apikeys sa_now roles keys
   account=$(gcloud config get-value account 2>/dev/null)
   billing=$(gcloud billing projects describe "$project" --format='value(billingAccountName)')
-  vertex=$(enabled aiplatform.googleapis.com)
-  apikeys=$(enabled apikeys.googleapis.com)
+  vertex=$(enabled aiplatform.googleapis.com) || exit 1
+  apikeys=$(enabled apikeys.googleapis.com) || exit 1
   sa_now=$(gcloud iam service-accounts list --project "$project" --filter="email=${sa}" --format='value(email)')
   roles=$(gcloud projects get-iam-policy "$project" --flatten='bindings[].members' \
     --filter="bindings.members:serviceAccount:${sa}" --format='value(bindings.role)' | tr '\n' ' ')
@@ -82,6 +83,11 @@ fi
 if [ -e "$out" ] || [ -L "$out" ]; then
   echo "${out} already exists; remove it or pass --out with a new path" >&2; exit 1
 fi
+# Claim the path now, private and empty, so nothing can be put there during the
+# gcloud calls below; it is removed again if the key is not written.
+umask 077
+(set -C; : > "$out")
+trap '[ -s "$out" ] || rm -f "$out"' EXIT
 
 echo
 echo "Applying:"
@@ -100,16 +106,21 @@ gcloud iam roles describe "$role_id" --project "$project" > /dev/null 2>&1 \
 gcloud projects add-iam-policy-binding "$project" --member "serviceAccount:${sa}" --role "$role" --condition=None > /dev/null
 # A fixed id, so the next command finds this key without parsing create's output.
 uid="${key_name}-$(date -u +%Y%m%d%H%M%S)"
-# create can echo the new key string in its result, on either stream, so both are dropped.
+# --async returns the operation, not the finished key, so the key string is
+# never in create's output or in gcloud's own log of it.
 gcloud services api-keys create --project "$project" --key-id "$uid" --display-name "$key_name" \
-  --api-target=service=aiplatform.googleapis.com --service-account "$sa" > /dev/null 2>&1 \
-  || { echo "creating key ${uid} failed; its output is hidden because it can hold the key." >&2
-       echo "An organisation policy (iam.managed.disableServiceAccountApiKeyCreation) is a common cause." >&2; exit 1; }
-# noclobber: the write fails rather than follow a file or link created since the check above.
-umask 077
-set -o noclobber
-gcloud services api-keys get-key-string "$uid" --project "$project" --format='value(keyString)' > "$out"
-[ -s "$out" ] || { echo "no key string was written to ${out}" >&2; exit 1; }
+  --api-target=service=aiplatform.googleapis.com --service-account "$sa" --async > /dev/null \
+  || { echo "creating key ${uid} failed. An organisation policy" >&2
+       echo "(iam.managed.disableServiceAccountApiKeyCreation) is a common cause." >&2; exit 1; }
+# Still the plain, empty, private file claimed above, not a link or a pipe.
+if ! [ -f "$out" ] || [ -L "$out" ] || [ -s "$out" ]; then
+  echo "${out} changed while the key was being created; not writing to it" >&2; exit 1
+fi
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  gcloud services api-keys get-key-string "$uid" --project "$project" --format='value(keyString)' >> "$out" 2> /dev/null && break
+  [ "$attempt" -lt 10 ] && sleep 3
+done
+[ -s "$out" ] || { echo "no key string was written to ${out}; key ${uid} may still be creating" >&2; exit 1; }
 echo "  key ${uid} written to ${out}"
 
 echo
