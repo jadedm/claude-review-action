@@ -1,0 +1,558 @@
+# Generated from gemini-review.yml by scripts/render_vertex_workflow.py (#55).
+# Do not edit by hand: change gemini-review.yml or the renderer, then rerun it.
+name: Gemini Review via Vertex AI (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      stack:
+        description: 'Stack-specific prompt to load from prompts/<stack>.md (e.g. nestjs-fastify-drizzle)'
+        type: string
+        required: true
+      runner:
+        description: 'JSON-encoded runs-on value (e.g. "ubuntu-latest" or "[\"self-hosted\",\"aws\",\"spot\"]")'
+        type: string
+        default: '"ubuntu-latest"'
+      model:
+        description: 'Gemini model name'
+        type: string
+        default: 'gemini-4-argon'
+      thinking_level:
+        description: 'How hard Gemini thinks before reviewing: minimal, low, medium or high. none or an empty value sends no thinking setting, which leaves gemini-4-argon not thinking at all; ignored for gemini-1.x and 2.x models (#33)'
+        type: string
+        default: 'high'
+      vertex_project:
+        description: 'Google Cloud project ID that Vertex AI bills to'
+        type: string
+        required: true
+      vertex_location:
+        description: 'Vertex AI location: global, or a region such as us-central1 that serves the model'
+        type: string
+        default: 'global'
+      workload_identity_provider:
+        description: 'Full resource name of the workload identity provider that trusts GitHub, projects/NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER (scripts/setup_vertex_wif.sh prints it)'
+        type: string
+        required: true
+      service_account:
+        description: 'Email of the service account the job signs in as; it needs only aiplatform.endpoints.predict'
+        type: string
+        required: true
+      max_total_lines:
+        description: 'Max total source lines per Gemini call'
+        type: number
+        default: 20000
+      max_per_file:
+        description: 'Skip files larger than this many lines'
+        type: number
+        default: 3000
+      max_files:
+        description: 'Max number of files per Gemini call'
+        type: number
+        default: 50
+      max_diff_lines:
+        description: 'Max diff lines per Gemini call'
+        type: number
+        default: 5000
+      max_payload_bytes:
+        description: 'Max bytes of diff plus source per Gemini call. Line caps miss a file with very long lines'
+        type: number
+        default: 2000000
+      max_chunks:
+        description: 'Large pull requests are split into up to this many parallel Gemini calls, each within the caps above (1 to 5; 1 is a single call)'
+        type: number
+        default: 3
+      slack_notify:
+        description: 'Whether to send a Slack notification after the run'
+        type: boolean
+        default: false
+      extra_prompt:
+        description: 'Optional repo-specific addendum appended after the stack prompt. Use this for short inline notes; for long-form content prefer extra_prompt_path.'
+        type: string
+        default: ''
+      extra_prompt_path:
+        description: 'Optional path (relative to the consumer repo root) to a markdown file whose contents are appended after the stack prompt — e.g. .github/review-extras.md. Cleaner than a multi-line YAML string for long-form repo-specific conventions. If both extra_prompt and extra_prompt_path are set, both are appended (file contents first, then inline string).'
+        type: string
+        default: ''
+    secrets:
+      slack_webhook_url:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  # The caller must grant this too; a called workflow cannot raise its caller's permissions.
+  id-token: write
+
+jobs:
+  gemini:
+    # Trigger paths:
+    #   - pull_request: every push / open / reopen / ready_for_review
+    #   - issue_comment containing @gemini: top-level PR comments
+    #   - pull_request_review_comment containing @gemini: inline review-thread
+    #     replies (parity with the Claude reusable, which already handles this)
+    # On a public repo anyone can comment, and each comment spends the
+    # caller's API quota; only people with a role in the repo may trigger it.
+    # Private repos skip the check: only people with access can comment, and
+    # author_association can misreport private org membership.
+    # A comment counts only when it is new: an edited or deleted one would
+    # bill another review.
+    if: >
+      github.event_name == 'pull_request' ||
+      (github.event.action == 'created' &&
+      ((github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '@gemini')) ||
+       (github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, '@gemini'))) &&
+      (github.event.repository.private ||
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)))
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    concurrency:
+      group: gemini-review-vertex-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Check the provider
+        # Its own step, before anything else, so a wrong setting fails every
+        # run, including one whose files are all filtered and that calls
+        # nothing. The model, project and location become part of the URL, so
+        # only plain names pass.
+        id: provider
+        env:
+          PROVIDER: vertex
+          VERTEX_PROJECT: ${{ inputs.vertex_project }}
+          VERTEX_LOCATION: ${{ inputs.vertex_location }}
+          GEMINI_MODEL: ${{ inputs.model }}
+          THINKING_LEVEL: ${{ inputs.thinking_level }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$GEMINI_MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::model must be a plain model name such as gemini-4-argon, got '${GEMINI_MODEL}'"; exit 1
+          fi
+          case "$PROVIDER" in
+            ai_studio)
+              echo "api_url=https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            vertex) ;;
+            *) echo "::error::provider must be ai_studio or vertex, got '${PROVIDER}'"; exit 1 ;;
+          esac
+          if [ -z "$VERTEX_PROJECT" ]; then
+            echo "::error::provider vertex needs vertex_project, the Google Cloud project ID that Vertex AI bills to"; exit 1
+          fi
+          if ! [[ "$VERTEX_PROJECT" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
+            echo "::error::vertex_project must be a Google Cloud project ID, got '${VERTEX_PROJECT}'"; exit 1
+          fi
+          # Google's Vertex guide for gemini-4-argon lists LOW, MEDIUM and HIGH
+          # and says MINIMAL returns 400; other models are left to Vertex.
+          if [ "$THINKING_LEVEL" = "minimal" ] && [[ "$GEMINI_MODEL" == gemini-4-argon* ]]; then
+            echo "::error::Vertex AI does not take thinking_level minimal for ${GEMINI_MODEL}; use low, medium, high or none"; exit 1
+          fi
+          # global has its own host; a region has a regional one.
+          host=""
+          [ "$VERTEX_LOCATION" = "global" ] && host="aiplatform.googleapis.com"
+          [[ "$VERTEX_LOCATION" =~ ^[a-z]+-[a-z]+[0-9]+$ ]] && host="${VERTEX_LOCATION}-aiplatform.googleapis.com"
+          if [ -z "$host" ]; then
+            echo "::error::vertex_location must be global or a region such as us-central1, got '${VERTEX_LOCATION}'"; exit 1
+          fi
+          echo "api_url=https://${host}/v1/projects/${VERTEX_PROJECT}/locations/${VERTEX_LOCATION}/publishers/google/models/${GEMINI_MODEL}:generateContent" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout consumer repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # A comment run's own commit is the default branch, so it reviewed the
+          # default branch's files (#16); check out the pull request's head
+          # instead. Other events keep their merge ref. Nothing in this job runs
+          # the checkout's content: files are read as text (#29, #35).
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+          fetch-depth: 0
+          # Nothing later needs git credentials, and a saved token in
+          # .git/config is one file read away from the prompt (#29).
+          persist-credentials: false
+
+      - name: Clear the action folder
+        # The consumer checkout is the pull request's tree, which could hold its own
+        # .claude-review-action, a symlink to a runner folder included. Remove the
+        # link or folder itself (rm without a trailing slash never follows a link)
+        # before the action repo is checked out into that path.
+        run: rm -rf -- .claude-review-action
+
+      - name: Checkout review action repo (prompts)
+        id: action-checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This workflow's own repository and commit, always: there is no ref
+          # input here, so a fork's workflow loads the fork's prompts. job.workflow_*
+          # is empty on GitHub Enterprise Server; v1 here is the old default, not
+          # this repo's default branch.
+          repository: ${{ job.workflow_repository || 'jadedm/pr-review-workflows' }}
+          ref: ${{ job.workflow_sha || 'v1' }}
+          path: .claude-review-action
+          token: ${{ github.token }}
+          # Nothing later needs git credentials in this checkout either (#25 review).
+          persist-credentials: false
+
+      - name: Install GitHub CLI
+        run: |
+          set -euo pipefail
+          if ! command -v gh &> /dev/null; then
+            if command -v dnf &> /dev/null; then
+              sudo dnf install -y 'dnf-command(config-manager)' || true
+              # dnf5 (Fedora 41 and later) renamed --add-repo.
+              sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo \
+                || sudo dnf config-manager addrepo --from-repofile=https://cli.github.com/packages/rpm/gh-cli.repo
+              sudo dnf install -y gh
+            elif command -v apt-get &> /dev/null; then
+              type -p curl >/dev/null || sudo apt-get install -y curl
+              # Downloaded and checked before anything is written: a failed curl
+              # piped into the keyring left it empty, and the apt source added
+              # next then broke apt-get update for every later job on a
+              # self-hosted machine (#50).
+              keyring=$(mktemp)
+              curl -fsSL -o "$keyring" https://cli.github.com/packages/githubcli-archive-keyring.gpg
+              test -s "$keyring"
+              sudo install -m 0644 "$keyring" /usr/share/keyrings/githubcli-archive-keyring.gpg
+              rm -f "$keyring"
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+              sudo apt-get update && sudo apt-get install -y gh
+            fi
+          fi
+          command -v gh > /dev/null || { echo "::error::gh is not installed, and neither dnf nor apt-get is here to install it"; exit 1; }
+
+      - name: Get PR diff
+        id: diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # GitHub refuses the whole-PR diff past 300 files or 20,000 lines
+          # (HTTP 406 "diff exceeded the maximum number of files"), which
+          # failed the review outright on large PRs. Fall back to the
+          # per-file patches of the paginated files API, which has no such
+          # cap. Only the first max_diff_lines lines are sent to the model
+          # either way.
+          if ! gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt 2> /tmp/pr-diff.err; then
+            if grep -qiE '406|too_large|exceeded the maximum' /tmp/pr-diff.err; then
+              echo "::notice::PR diff too large for the diff API; using per-file patches"
+              gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+                --jq '.[] | "diff --git a/\(.filename) b/\(.filename)\n\(.patch // "(patch omitted by GitHub: file too large)")"' \
+                > /tmp/pr-diff.txt
+            else
+              cat /tmp/pr-diff.err >&2
+              exit 1
+            fi
+          fi
+          echo "lines=$(wc -l < /tmp/pr-diff.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Collect changed files
+        id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Resolve the file list via the GitHub API rather than
+          # `git diff origin/<base>...HEAD`. The git-diff approach breaks on
+          # `issue_comment` events because `github.event.pull_request.base.ref`
+          # is empty there — the command expands to `git diff origin/...HEAD`,
+          # silently emits nothing, and the whole review is skipped without
+          # an error. The REST files API works for both `pull_request` and
+          # `issue_comment` payloads, and --paginate reads every page:
+          # `gh pr view --json files` stopped at the first 100 files, so a
+          # large PR silently lost the rest.
+          set -euo pipefail
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' > /tmp/all-changed-files.txt
+          # grep exits 1 when it keeps nothing (a lockfile-only PR); that is
+          # a valid empty list, not a failure. The API call above is not
+          # covered by this, so an API error still fails the step.
+          { grep -v -E '\.(lock|min\.(js|css)|map|snap|png|jpg|jpeg|gif|svg|ico|woff|ttf|eot)$' /tmp/all-changed-files.txt || [ $? -eq 1 ]; } \
+            | { grep -v -E '(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|dist/|node_modules/|coverage/)' || [ $? -eq 1 ]; } \
+            > /tmp/changed-files.txt
+          echo "count=$(wc -l < /tmp/changed-files.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Build review payload
+        if: steps.files.outputs.count > 0
+        id: payload
+        env:
+          MAX_TOTAL_LINES: ${{ inputs.max_total_lines }}
+          MAX_PER_FILE: ${{ inputs.max_per_file }}
+          MAX_FILES: ${{ inputs.max_files }}
+          MAX_DIFF_LINES: ${{ inputs.max_diff_lines }}
+          MAX_PAYLOAD_BYTES: ${{ inputs.max_payload_bytes }}
+          MAX_CHUNKS: ${{ inputs.max_chunks }}
+          # IMPORTANT: pass user-controlled inputs via env, NEVER interpolate
+          # ${{ inputs.* }} directly into bash. Direct interpolation lets
+          # backticks / $(...) inside a consumer's extra_prompt run as shell
+          # commands in the runner where the Gemini credential is exported.
+          STACK: ${{ inputs.stack }}
+          EXTRA_PROMPT: ${{ inputs.extra_prompt }}
+          EXTRA_PROMPT_PATH: ${{ inputs.extra_prompt_path }}
+          GH_TOKEN: ${{ github.token }}
+          REPO_FULL_NAME: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          ROOT=".claude-review-action"
+          BASE="$ROOT/prompts/base.md"
+          STACK_FILE="$ROOT/prompts/${STACK}.md"
+
+          if [ ! -f "$BASE" ] || [ ! -f "$STACK_FILE" ]; then
+            echo "::error::base or stack prompt not found"
+            exit 1
+          fi
+
+          # Split the pull request into up to max_chunks calls, each within
+          # the caps, and record every file no call will see (#29, #30).
+          # Python rather than bash: it reads files by name without shell
+          # parsing, never follows a PR's symlinks, and cuts on whole UTF-8
+          # characters. It prints the number of calls.
+          rm -rf /tmp/review-chunks
+          # -s -E, not -I: the script imports safe_path.py from its own folder.
+          CALLS=$(python3 -s -E "$ROOT/scripts/gemini_chunks.py" /tmp/review-chunks)
+          echo "calls=${CALLS}" >> "$GITHUB_OUTPUT"
+
+          # The review rules come from the pull request's base commit, never its
+          # checkout, so a pull request cannot rewrite the instructions its own
+          # review follows; a change to them applies from the next one (#37).
+          EXTRAS_FILE="$RUNNER_TEMP/review-extras.md"
+          rm -f "$EXTRAS_FILE"
+          if [ -n "$EXTRA_PROMPT_PATH" ]; then
+            python3 -I "$ROOT/scripts/base_file.py" "$REPO_FULL_NAME" "$PR_NUMBER" "$EXTRA_PROMPT_PATH" "$EXTRAS_FILE"
+          fi
+
+          {
+            cat "$BASE"
+            echo ""
+            cat "$STACK_FILE"
+            # Optional repo-specific addendum from a file inside the
+            # consumer repo + the optional inline string. Either or both
+            # are appended under a single "Repo-specific notes" heading;
+            # file contents render first, inline string second.
+            EXTRAS_RENDERED=0
+            if [ -s "$EXTRAS_FILE" ]; then
+              echo ""
+              echo "## Repo-specific notes"
+              echo ""
+              cat < "$EXTRAS_FILE"
+              EXTRAS_RENDERED=1
+            fi
+            if [ -n "$EXTRA_PROMPT" ]; then
+              if [ "$EXTRAS_RENDERED" -eq 0 ]; then
+                echo ""
+                echo "## Repo-specific notes"
+                echo ""
+              fi
+              printf '%s\n' "$EXTRA_PROMPT"
+            fi
+            # Output-format instructions live in prompts/_gemini-tail.md.
+            # Inlining them here as a bash heredoc broke YAML parsing because
+            # the heredoc body sat at column 1, outside the `run: |` literal
+            # scalar — Actions failed the workflow with "error parsing called
+            # workflow" the moment a consumer invoked the reusable.
+            echo ""
+            cat "$ROOT/prompts/_gemini-tail.md"
+          } > /tmp/review-prompt.txt
+
+      - name: Sign in to Google Cloud
+        # The job's OIDC token is exchanged for a short-lived access token of
+        # the service account, through the caller's workload identity
+        # provider. Nothing is written to the checkout, which is the pull
+        # request's tree, or exported to later steps' environment.
+        if: steps.files.outputs.count > 0
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account: ${{ inputs.service_account }}
+          token_format: access_token
+          # Long enough for three tries of the slowest call; the default is an hour.
+          access_token_lifetime: 1800s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Call Gemini API
+        if: steps.files.outputs.count > 0
+        id: gemini
+        env:
+          GEMINI_API_KEY: ${{ steps.auth.outputs.access_token }}
+          GEMINI_MODEL: ${{ inputs.model }}
+          THINKING_LEVEL: ${{ inputs.thinking_level }}
+          PROVIDER: vertex
+          API_URL: ${{ steps.provider.outputs.api_url }}
+          # key sends GEMINI_API_KEY as X-goog-api-key; bearer sends it as an
+          # OAuth access token (gemini-review-vertex.yml, #55).
+          AUTH_SCHEME: bearer
+        run: |
+          set -euo pipefail
+          PROMPT=$(cat /tmp/review-prompt.txt)
+          # AUTH_SCHEME below picks the credential header. Vertex wants the turn's
+          # role and the level in capitals (#55); AI Studio's request is unchanged.
+          SERVICE="Gemini API" ROLE="" LEVEL="$THINKING_LEVEL"
+          if [ "$PROVIDER" = "vertex" ]; then
+            SERVICE="Vertex AI" ROLE='"role": "user", ' LEVEL=$(printf '%s' "$THINKING_LEVEL" | tr '[:lower:]' '[:upper:]')
+          fi
+          if [ -z "$API_URL" ]; then echo "::error::no API URL; the Check the provider step did not run"; exit 1; fi
+          case "$AUTH_SCHEME" in
+            key) AUTH_HEADER="X-goog-api-key: ${GEMINI_API_KEY}" ;;
+            bearer) AUTH_HEADER="Authorization: Bearer ${GEMINI_API_KEY}" ;;
+            *) echo "::error::AUTH_SCHEME must be key or bearer, got '${AUTH_SCHEME}'"; exit 1 ;;
+          esac
+          # curl reads the header from a private file, so the credential is not
+          # on its command line, where other processes on the runner can see it.
+          AUTH_FILE=$(umask 077; mktemp "${RUNNER_TEMP:-/tmp}/gemini-auth.XXXXXX")
+          trap 'rm -f "$AUTH_FILE"' EXIT
+          printf '%s\n' "$AUTH_HEADER" > "$AUTH_FILE"
+          unset AUTH_HEADER GEMINI_API_KEY  # the scripts below need neither
+          # Only a known level reaches the request body, so the input cannot add JSON.
+          # gemini-4-argon does no thinking unless asked; with high it found the most
+          # defects and no false ones in a blind comparison (jadedm/sandbox#101).
+          case "$THINKING_LEVEL" in
+            ""|none) THINKING="" ;;
+            minimal|low|medium|high) THINKING=", \"thinkingConfig\": {\"thinkingLevel\": \"${LEVEL}\"}" ;;
+            *) echo "::error::thinking_level must be none, minimal, low, medium or high, got '${THINKING_LEVEL}'"; exit 1 ;;
+          esac
+          # Gemini 1.x and 2.x take thinkingBudget, not thinkingLevel, and answer
+          # 400 to it, so a caller pinned to one keeps working unchanged.
+          case "$GEMINI_MODEL" in
+            gemini-1*|gemini-2*)
+              [ -n "$THINKING" ] && echo "::notice::${GEMINI_MODEL} does not take thinking_level; sending none"
+              THINKING="" ;;
+          esac
+
+          # Thinking models spend output tokens on thinking, and they count
+          # against maxOutputTokens. A 5,000-line payload took 110 s and 15,420
+          # output tokens on gemini-3.1-pro-preview, and 22 to 31 s on
+          # gemini-4-argon (#27). At the #29 caps, 238k prompt tokens took 28 s
+          # on gemini-4-argon; 137k took 241 s on gemini-3.8-flash, which
+          # thinks longer (it was before the 420 s limit). With
+          # thinking on, argon took up to 232 s on a 210k-token request (#33), so
+          # each call now gets 420 s.
+          #
+          # One call per chunk (#30), run in parallel. A call records its
+          # outcome in <dir>/status (ok, unreadable or failed) and never ends
+          # the step itself, so one failed call cannot cancel the others; the
+          # merge below decides what the step does.
+          call_chunk() {
+            local dir=$1 result="$1/result.json" attempt http rc full escaped
+            full="${PROMPT}
+
+          ## Changed Files
+
+          $(cat "$dir/code.txt")
+
+          ## Git Diff
+
+          $(cat "$dir/diff.txt")"
+            escaped=$(printf '%s\n' "$full" | python3 -I -c 'import sys,json; print(json.dumps(sys.stdin.buffer.read().decode("utf-8", "replace")))')
+            for attempt in 1 2 3; do
+              rc=0
+              http=$(curl -s -w "%{http_code}" -o "$result" \
+                "$API_URL" \
+                -H 'Content-Type: application/json' \
+                -H @"$AUTH_FILE" \
+                --max-time 420 \
+                -X POST \
+                -d @- <<CURL_EOF
+          {
+            "contents": [{${ROLE}"parts": [{"text": ${escaped}}]}],
+            "generationConfig": {
+              "maxOutputTokens": 65536,
+              "temperature": 1.0,
+              "responseMimeType": "application/json"${THINKING}
+            }
+          }
+          CURL_EOF
+              ) || rc=$?
+              if [ "$rc" -ne 0 ]; then
+                echo "${SERVICE} request failed (curl exit ${rc}; 28 means no reply within 420 s)"
+                echo failed > "$dir/status"
+                return 0
+              fi
+              if [ "$http" = "200" ]; then break; fi
+              if [ "$http" != "429" ] && [ "$http" != "503" ]; then
+                echo "${SERVICE} error (HTTP ${http}):"
+                cat "$result"; echo
+                echo failed > "$dir/status"
+                return 0
+              fi
+              [ "$attempt" -lt 3 ] && sleep $((5 * attempt))
+            done
+            if [ "$http" != "200" ]; then
+              echo "${SERVICE} failed after 3 attempts (last HTTP ${http}):"
+              cat "$result"; echo
+              echo failed > "$dir/status"
+              return 0
+            fi
+            # Gemini quotes code with backslashes such as \d inside its JSON
+            # reply; the parser repairs those escapes (#8). Exit 2 means the
+            # reply was unreadable, and the raw text stays in this log only.
+            python3 -I -c 'import json, sys; u = json.load(open(sys.argv[1])).get("usageMetadata", {}); print("Tokens: prompt %s, thinking %s, output %s" % (u.get("promptTokenCount"), u.get("thoughtsTokenCount", "not reported"), u.get("candidatesTokenCount")))' "$result" 2>/dev/null || echo "Tokens: unreadable"
+            rc=0
+            python3 -I .claude-review-action/scripts/gemini_review_parse.py "$result" "$dir/review.json" || rc=$?
+            if [ "$rc" -eq 0 ]; then echo ok > "$dir/status"; return 0; fi
+            if [ "$rc" -eq 2 ]; then echo unreadable > "$dir/status"; return 0; fi
+            echo failed > "$dir/status"
+          }
+
+          # No match (zero planned calls) leaves both loops empty rather than
+          # running them once on the literal pattern.
+          shopt -s nullglob
+          for dir in /tmp/review-chunks/*/; do
+            call_chunk "${dir%/}" > "${dir%/}/log" 2>&1 &
+          done
+          wait  # each call wrote its own status; a missing status counts as failed
+
+          for dir in /tmp/review-chunks/*/; do
+            echo "::group::Call ${dir%/}: $(cat "${dir}status" 2>/dev/null || echo failed)"
+            cat "${dir}log"
+            echo "::endgroup::"
+          done
+
+          # One review from all calls. Exit 1 when every call failed; when
+          # none succeeded but one was unreadable, it writes the unreadable
+          # marker and the next step posts the fixed notice and fails, as before.
+          python3 -I .claude-review-action/scripts/gemini_review_merge.py /tmp/review-chunks /tmp/gemini-review.json /tmp/review-coverage.json
+
+      - name: Post review comment
+        if: steps.files.outputs.count > 0
+        id: post-review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Every field Gemini returns is untrusted: it read the pull request.
+          # The builder renders it inert (no mentions, links, images or HTML)
+          # and keeps the comment under GitHub's size limit.
+          COMMENT=$(python3 -I .claude-review-action/scripts/gemini_review_comment.py /tmp/gemini-review.json /tmp/review-coverage.json)
+          gh pr comment ${{ github.event.pull_request.number || github.event.issue.number }} --body "$COMMENT"
+
+          if python3 -I -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('nothing_sent') else 1)"; then
+            echo "assessment=not_reviewed" >> "$GITHUB_OUTPUT"
+            echo "issue_count=n/a" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if python3 -I -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('unparsed') else 1)"; then
+            echo "assessment=unparsed" >> "$GITHUB_OUTPUT"
+            echo "issue_count=?" >> "$GITHUB_OUTPUT"
+            echo "::error::Gemini's reply could not be read as a review; see the Call Gemini API step log"
+            exit 1
+          fi
+
+          # Only a known verdict reaches the outputs: the model's own text could
+          # carry a newline and write extra output lines.
+          echo "assessment=$(python3 -I -c "import json; a=json.load(open('/tmp/gemini-review.json')).get('overall_assessment'); print(a if a in ('approve','comment','request_changes') else 'other')")" >> "$GITHUB_OUTPUT"
+          echo "issue_count=$(python3 -I -c "import json; print(len(json.load(open('/tmp/gemini-review.json')).get('issues', [])))")" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Slack
+        # always() still reports failed runs, but only once this repo's own
+        # action is in .claude-review-action: before that checkout, the folder
+        # can hold the pull request's files (#59).
+        if: always() && steps.action-checkout.outcome == 'success' && inputs.slack_notify && github.event_name == 'pull_request'
+        uses: ./.claude-review-action/actions/slack-notify
+        with:
+          webhook_url: ${{ secrets.slack_webhook_url }}
+          message: |
+            💎 *Gemini* reviewed PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+            Repo: ${{ github.repository }} | Assessment: ${{ steps.post-review.outputs.assessment || 'error' }} | Issues: ${{ steps.post-review.outputs.issue_count || '?' }}
+            <${{ github.event.pull_request.html_url }}|View PR>
