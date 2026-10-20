@@ -121,7 +121,7 @@ jobs:
           # ref (#25), so a fork's workflow loads the fork's prompts. job.workflow_*
           # is empty on GitHub Enterprise Server; v1 here is the old default, not
           # this repo's default branch.
-          repository: ${{ job.workflow_repository || 'jadedm/claude-review-action' }}
+          repository: ${{ job.workflow_repository || 'jadedm/pr-review-workflows' }}
           ref: ${{ inputs.ref || job.workflow_sha || 'v1' }}
           path: .claude-review-action
           token: ${{ github.token }}

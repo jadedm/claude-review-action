@@ -1,4 +1,4 @@
-# claude-review-action
+# pr-review-workflows
 
 Reusable GitHub Actions workflows for running AI code review on every pull request. Two parallel reviewers, severity-rated findings, optional Slack notification.
 
@@ -48,7 +48,7 @@ permissions:
 
 jobs:
   review:
-    uses: jadedm/claude-review-action/.github/workflows/claude-review.yml@v1
+    uses: jadedm/pr-review-workflows/.github/workflows/claude-review.yml@v1
     with:
       stack: nestjs-fastify-drizzle
       runner: '"ubuntu-latest"'
@@ -77,7 +77,7 @@ permissions:
 
 jobs:
   review:
-    uses: jadedm/claude-review-action/.github/workflows/gemini-review.yml@v1
+    uses: jadedm/pr-review-workflows/.github/workflows/gemini-review.yml@v1
     with:
       stack: nestjs-fastify-drizzle
       runner: '"ubuntu-latest"'
