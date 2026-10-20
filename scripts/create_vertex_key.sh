@@ -108,10 +108,25 @@ gcloud projects add-iam-policy-binding "$project" --member "serviceAccount:${sa}
 uid="${key_name}-$(date -u +%Y%m%d%H%M%S)"
 # --async returns the operation, not the finished key, so the key string is
 # never in create's output or in gcloud's own log of it.
-gcloud services api-keys create --project "$project" --key-id "$uid" --display-name "$key_name" \
-  --api-target=service=aiplatform.googleapis.com --service-account "$sa" --async > /dev/null \
-  || { echo "creating key ${uid} failed. An organisation policy" >&2
-       echo "(iam.managed.disableServiceAccountApiKeyCreation) is a common cause." >&2; exit 1; }
+# With --async gcloud names the operation in a message ("operations wait operations/..."),
+# not the key, so the operation id is read from that text.
+op=$(gcloud services api-keys create --project "$project" --key-id "$uid" --display-name "$key_name" \
+  --api-target=service=aiplatform.googleapis.com --service-account "$sa" --async 2>&1 | grep -o 'operations/[A-Za-z0-9._-]*' | head -1) || true
+[ -n "$op" ] || { echo "creating key ${uid} returned no operation" >&2; exit 1; }
+# Read only done and error, never the result, which holds the key string.
+for attempt in $(seq 1 20); do
+  status=$(gcloud services operations describe "$op" --format='value(done,error.message)' 2>&1) || true
+  case "$status" in True*) break ;; esac
+  [[ "$status" == *"resulted in a failure"* ]] && break
+  sleep 3
+done
+case "$status" in
+  True) ;;
+  *) echo "creating key ${uid} failed: ${status}" >&2
+     echo "An organisation policy (iam.managed.disableServiceAccountApiKeyCreation) that does not list" >&2
+     echo "aiplatform.googleapis.com in allowedServices refuses this key." >&2
+     exit 1 ;;
+esac
 # Still the plain, empty, private file claimed above, not a link or a pipe.
 if ! [ -f "$out" ] || [ -L "$out" ] || [ -s "$out" ]; then
   echo "${out} changed while the key was being created; not writing to it" >&2; exit 1
