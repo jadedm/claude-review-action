@@ -41,6 +41,16 @@ done
 sa_name="pr-review-vertex"
 sa="${sa_name}@${project}.iam.gserviceaccount.com"
 key_name="pr-review-vertex"
+
+# Keys whose display name is exactly key_name, one "name<TAB>rest" per line.
+# gcloud's displayName= filter is changing to a looser match, so the exact
+# comparison is done here.
+named_keys() {
+  local rows
+  rows=$(gcloud services api-keys list --project "$project" \
+    --format="value(displayName,name,uid,createTime,restrictions.apiTargets[].service.list(),serviceAccountEmail)") || return 1
+  awk -F'\t' -v n="$key_name" '$1 == n { sub(/^[^\t]*\t/, ""); print }' <<<"$rows"
+}
 role_id="prReviewVertexPredict"
 role="projects/${project}/roles/${role_id}"
 
@@ -62,8 +72,7 @@ state() {
     --filter="bindings.members:serviceAccount:${sa}" --format='value(bindings.role)' | tr '\n' ' ')
   keys="(API Keys API disabled)"
   if [ "$apikeys" = enabled ]; then
-    keys=$(gcloud services api-keys list --project "$project" --filter="displayName=${key_name}" \
-      --format='value(uid,createTime,restrictions.apiTargets[].service.list(),serviceAccountEmail)')
+    keys=$(named_keys | cut -f2-) || exit 1
   fi
   echo "  account:        ${account}"
   echo "  project:        ${project}"
@@ -100,9 +109,9 @@ trap '[ -s "$out" ] || rm -f "$out"' EXIT
 echo
 echo "Applying:"
 gcloud services enable aiplatform.googleapis.com apikeys.googleapis.com --project "$project"
-existing=$(gcloud services api-keys list --project "$project" --filter="displayName=${key_name}" --format='value(uid)')
+existing=$(named_keys | cut -f2)
 if [ -n "$existing" ] && [ "$replace" -eq 1 ]; then
-  for old in $(gcloud services api-keys list --project "$project" --filter="displayName=${key_name}" --format='value(name)'); do
+  for old in $(named_keys | cut -f1); do
     # delete prints the deleted key, string included, so its output is dropped.
     gcloud services api-keys delete "$old" --project "$project" --quiet > /dev/null 2>&1 \
       || { echo "deleting ${old##*/} failed" >&2; exit 1; }
