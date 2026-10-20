@@ -133,16 +133,19 @@ uid="${key_name}-$(date -u +%Y%m%d%H%M%S)"
 op=$(gcloud services api-keys create --project "$project" --key-id "$uid" --display-name "$key_name" \
   --api-target=service=aiplatform.googleapis.com ${bind[@]+"${bind[@]}"} --async 2>&1 | grep -o 'operations/[A-Za-z0-9._-]*' | head -1) || true
 [ -n "$op" ] || { echo "creating key ${uid} returned no operation" >&2; exit 1; }
-# Read only done and error, never the result, which holds the key string.
+# A finished operation carries the key string, and gcloud prints it as a
+# message on stderr, so stderr is never kept here: only the done flag on
+# stdout is read. A failed operation makes describe exit non-zero.
+status="" failed=0
 for attempt in $(seq 1 20); do
-  status=$(gcloud services operations describe "$op" --format='value(done,error.message)' 2>&1) || true
-  case "$status" in True*) break ;; esac
-  [[ "$status" == *"resulted in a failure"* ]] && break
+  if ! status=$(gcloud services operations describe "$op" --format='value(done)' 2> /dev/null); then failed=1; break; fi
+  [ "$status" = "True" ] && break
   sleep 3
 done
-case "$status" in
-  True) ;;
-  *) echo "creating key ${uid} failed: ${status}" >&2
+case "$status:$failed" in
+  True:0) ;;
+  *) echo "creating key ${uid} did not finish (done=${status:-unknown}). Its error is not printed here because a" >&2
+     echo "finished operation's message holds the key; run: gcloud services operations describe ${op} --format='value(error.message)' 2>/dev/null" >&2
      echo "An organisation policy (iam.managed.disableServiceAccountApiKeyCreation) that does not list" >&2
      echo "aiplatform.googleapis.com in allowedServices refuses this key." >&2
      exit 1 ;;
