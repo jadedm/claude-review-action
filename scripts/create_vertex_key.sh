@@ -18,19 +18,21 @@
 #
 #   test -s /tmp/.vertex-gemini && gh secret set GEMINI_VERTEX_API_KEY --repo OWNER/REPO < /tmp/.vertex-gemini
 #
-# It refuses to create a second key while one named pr-review-vertex exists;
-# delete the old one first. Uses the active gcloud account; set CLOUDSDK_CONFIG
+# It refuses to create a second key while one of the same name exists, unless
+# --replace is given, which deletes the existing ones first (their delete
+# output, which echoes the key, is discarded). Uses the active gcloud account; set CLOUDSDK_CONFIG
 # to pick another profile.
 set -euo pipefail
 
-usage() { echo "usage: $0 --project PROJECT_ID [--out FILE] [--unbound] [--apply]" >&2; exit 2; }
-project="" out="" apply=0 unbound=0
+usage() { echo "usage: $0 --project PROJECT_ID [--out FILE] [--unbound] [--replace] [--apply]" >&2; exit 2; }
+project="" out="" apply=0 unbound=0 replace=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) [ $# -ge 2 ] || usage; project=$2; shift 2 ;;
     --out) [ $# -ge 2 ] || usage; out=$2; shift 2 ;;
     --apply) apply=1; shift ;;
     --unbound) unbound=1; shift ;;
+    --replace) replace=1; shift ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
 done
@@ -109,9 +111,18 @@ echo
 echo "Applying:"
 gcloud services enable aiplatform.googleapis.com apikeys.googleapis.com --project "$project"
 existing=$(gcloud services api-keys list --project "$project" --filter="displayName=${key_name}" --format='value(uid)')
+if [ -n "$existing" ] && [ "$replace" -eq 1 ]; then
+  for old in $(gcloud services api-keys list --project "$project" --filter="displayName=${key_name}" --format='value(name)'); do
+    # delete prints the deleted key, string included, so its output is dropped.
+    gcloud services api-keys delete "$old" --project "$project" --quiet > /dev/null 2>&1 \
+      || { echo "deleting ${old##*/} failed" >&2; exit 1; }
+    echo "  deleted ${old##*/}"
+  done
+  existing=""
+fi
 if [ -n "$existing" ]; then
   echo "a key named ${key_name} already exists (${existing}); delete it first:" >&2
-  echo "  gcloud services api-keys delete UID --project ${project}" >&2
+  echo "  gcloud services api-keys delete UID --project ${project} --quiet > /dev/null 2>&1, or rerun with --replace" >&2
   exit 1
 fi
 bind=(--service-account "$sa")
