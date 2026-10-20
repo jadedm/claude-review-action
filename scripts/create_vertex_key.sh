@@ -13,7 +13,7 @@
 # whose only grant is a custom role holding aiplatform.endpoints.predict (the
 # permission generateContent needs), and creates an API key bound to that
 # account and restricted to the Vertex AI API. The key is written to FILE
-# (default /tmp/.vertex-gemini, created new with mode 600) and never printed.
+# (default /tmp/.vertex-gemini, or /tmp/.vertex-gemini-unbound with --unbound; created new, mode 600) and never printed.
 # Put it in a caller repo's secret with:
 #
 #   test -s /tmp/.vertex-gemini && gh secret set GEMINI_VERTEX_API_KEY --repo OWNER/REPO < /tmp/.vertex-gemini
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 usage() { echo "usage: $0 --project PROJECT_ID [--out FILE] [--unbound] [--apply]" >&2; exit 2; }
-project="" out="/tmp/.vertex-gemini" apply=0 unbound=0
+project="" out="" apply=0 unbound=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) [ $# -ge 2 ] || usage; project=$2; shift 2 ;;
@@ -35,6 +35,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$project" ] || usage
+# Separate default files, so an unbound key and a bound one never overwrite each other.
+[ -n "$out" ] || { out="/tmp/.vertex-gemini"; [ "$unbound" -eq 1 ] && out="/tmp/.vertex-gemini-unbound"; }
 
 sa_name="pr-review-vertex"
 sa="${sa_name}@${project}.iam.gserviceaccount.com"
