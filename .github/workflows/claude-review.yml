@@ -212,6 +212,38 @@ jobs:
             --allowedTools "mcp__github_inline_comment__create_inline_comment"
             --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*),Read(//proc/**),Read(~/.claude/**),Read(~/.config/**),Read(~/.ssh/**),Read(~/.docker/**),Read(~/.git-credentials),Read(~/.gitconfig),Read(~/.aws/**),Read(~/.kube/**),Read(~/.azure/**),Read(~/.gnupg/**),Read(~/.npmrc),Read(~/.netrc),Read(~/.pypirc),Read(//**/_temp/_runner_file_commands/**),Read(//**/_temp/git-credentials-*),Read(//**/.credentials),Read(//**/.credentials_rsaparams),Read(//**/.runner),Read(//**/_diag/**),Read(**/.git/**)" --permission-mode default
 
+      - name: Install GitHub CLI
+        # The notice below calls gh, and self-hosted runners may not have it: a
+        # skip then failed with exit 127 and posted nothing (#50). Same script as
+        # the Gemini workflow's step, which a test keeps identical, and the same
+        # condition as the notice, so a reviewed run never pays for it.
+        if: success() && steps.claude-review.outputs.conclusion == ''
+        run: |
+          set -euo pipefail
+          if ! command -v gh &> /dev/null; then
+            if command -v dnf &> /dev/null; then
+              sudo dnf install -y 'dnf-command(config-manager)' || true
+              # dnf5 (Fedora 41 and later) renamed --add-repo.
+              sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo \
+                || sudo dnf config-manager addrepo --from-repofile=https://cli.github.com/packages/rpm/gh-cli.repo
+              sudo dnf install -y gh
+            elif command -v apt-get &> /dev/null; then
+              type -p curl >/dev/null || sudo apt-get install -y curl
+              # Downloaded and checked before anything is written: a failed curl
+              # piped into the keyring left it empty, and the apt source added
+              # next then broke apt-get update for every later job on a
+              # self-hosted machine (#50).
+              keyring=$(mktemp)
+              curl -fsSL -o "$keyring" https://cli.github.com/packages/githubcli-archive-keyring.gpg
+              test -s "$keyring"
+              sudo install -m 0644 "$keyring" /usr/share/keyrings/githubcli-archive-keyring.gpg
+              rm -f "$keyring"
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+              sudo apt-get update && sudo apt-get install -y gh
+            fi
+          fi
+          command -v gh > /dev/null || { echo "::error::gh is not installed, and neither dnf nor apt-get is here to install it"; exit 1; }
+
       - name: Say when Claude did not review
         id: skipped
         # claude-code-action sets its conclusion output only when Claude ran.
