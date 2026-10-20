@@ -1,0 +1,44 @@
+name: Bug report
+description: A review that failed, was skipped, or posted something wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: For a security problem, do not open an issue. Use private vulnerability reporting (see SECURITY.md).
+  - type: dropdown
+    id: workflow
+    attributes:
+      label: Workflow
+      options:
+        - claude-review.yml
+        - gemini-review.yml
+        - Both
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version in your uses line
+      placeholder: "@v1, @v1.6.14 or a commit SHA"
+    validations:
+      required: true
+  - type: textarea
+    id: caller
+    attributes:
+      label: Your caller workflow
+      description: The file in your repo's .github/workflows. Remove anything private.
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log lines
+      description: The failing step's output. Remove keys, tokens and private code.
+      render: text

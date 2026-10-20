@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/jadedm/pr-review-workflows/discussions
+    about: Ask how to set something up, or discuss an idea before it is a change.
+  - name: Security vulnerability
+    url: https://github.com/jadedm/pr-review-workflows/security/advisories/new
+    about: Report it privately, not as an issue.

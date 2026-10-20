@@ -1,0 +1,22 @@
+name: Feature or new stack
+description: A change to what the reviewers do, or a prompt for a new stack
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What goes wrong or is missing today, with an example pull request if you have one.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+    validations:
+      required: true
+  - type: textarea
+    id: cost
+    attributes:
+      label: Effect on cost or security
+      description: Does it add model calls, tokens, permissions or secrets?
