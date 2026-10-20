@@ -93,8 +93,8 @@ vertex_in, vertex_sec = workflow_call("gemini-review-vertex.yml")
 vertex_only = readme_table("`gemini-review-vertex.yml` only")
 check("B12 the Vertex table lists exactly the inputs gemini-review-vertex.yml adds", set(vertex_only) == set(vertex_in) - set(gemini_in),
       (sorted(vertex_only), sorted(set(vertex_in) - set(gemini_in))))
-check("B12 the Vertex workflow takes the Gemini inputs except provider and ref, as the README says",
-      set(vertex_in) - set(vertex_only) == set(gemini_in) - {"provider", "ref"}, sorted(set(vertex_in) ^ set(gemini_in)))
+check("B12 the Vertex workflow takes the Gemini inputs except ref, as the README says",
+      set(vertex_in) - set(vertex_only) == set(gemini_in) - {"ref"}, sorted(set(vertex_in) ^ set(gemini_in)))
 check("B12 its only secret is the Slack webhook, and vertex_project is required there",
       vertex_sec == ["slack_webhook_url"] and vertex_in.get("vertex_project") == "required", (vertex_sec, vertex_in.get("vertex_project")))
 named = set(re.findall(r"\| `([a-z_]+)`(?:, optional)? \|", README.split("## Secrets", 1)[1].split("\n## ", 1)[0]))
@@ -135,7 +135,7 @@ print("line references")
 # The exact citation in the README, the file, the lines, and text that must be on them.
 CITES = [
     ("`claude-review.yml:138`", "claude-review.yml", 138, 138, "scripts/base_file.py"),
-    ("`gemini-review.yml:314`", "gemini-review.yml", 314, 314, "scripts/base_file.py"),
+    ("`gemini-review.yml:308`", "gemini-review.yml", 308, 308, "scripts/base_file.py"),
     ("`claude-review.yml:63`", "claude-review.yml", 63, 63, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
     ("`:79`", "claude-review.yml", 79, 79, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
     ("`:170`", "claude-review.yml", 170, 170, "anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9"),
@@ -144,7 +144,7 @@ CITES = [
     ("`claude-review.yml:248`", "claude-review.yml", 248, 248, "Say when Claude did not review"),
     ("`claude-review.yml:212-214`", "claude-review.yml", 212, 214, "--disallowedTools \"Edit,MultiEdit,Write"),
     ("`claude-review.yml:42-50`", "claude-review.yml", 42, 50, '["OWNER","MEMBER","COLLABORATOR"]'),
-    ("`gemini-review.yml:95-103`", "gemini-review.yml", 95, 103, '["OWNER","MEMBER","COLLABORATOR"]'),
+    ("`gemini-review.yml:85-94`", "gemini-review.yml", 85, 94, '["OWNER","MEMBER","COLLABORATOR"]'),
 ]
 for cite, name, start, end, needle in CITES:
     lines = (WF / name).resolve().read_text().splitlines()[start - 1:end]

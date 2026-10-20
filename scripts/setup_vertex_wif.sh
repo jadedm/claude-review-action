@@ -11,9 +11,11 @@
 # runs to act as the service account.
 #
 # The provider admits a GitHub token only when both hold:
-#   - the job runs gemini-review-vertex.yml from jadedm/pr-review-workflows at a
-#     release tag (v...), or at one of the --allow-ref refs, given in full such
-#     as refs/heads/my-branch, for testing;
+#   - the job runs gemini-review-vertex.yml from jadedm/pr-review-workflows at
+#     the v1 tag exactly, or at one of the --allow-ref refs, given in full such
+#     as refs/heads/my-branch, for testing (remove those afterwards). Older
+#     tags are not admitted, so a caller cannot pin back to a release that a
+#     later one fixed;
 #   - the calling repository's numeric id is one of the listed repositories'
 #     (ids, not names, because a deleted repository's name can be taken again).
 # So another workflow in a listed repository cannot get a token.
@@ -64,7 +66,7 @@ for repo in "${repo_list[@]}"; do
 done
 
 # The attribute condition, in CEL.
-refs_cel="assertion.job_workflow_ref.startsWith(\"${workflow}@refs/tags/v\")"
+refs_cel="assertion.job_workflow_ref == \"${workflow}@refs/tags/v1\""
 for ref in ${refs[@]+"${refs[@]}"}; do
   refs_cel="${refs_cel} || assertion.job_workflow_ref == \"${workflow}@${ref}\""
 done

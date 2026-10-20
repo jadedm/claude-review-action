@@ -25,6 +25,10 @@ on:
         description: 'Google Cloud project ID that Vertex AI bills to'
         type: string
         required: true
+      vertex_location:
+        description: 'Vertex AI location: global, or a region such as us-central1 that serves the model'
+        type: string
+        default: 'global'
       workload_identity_provider:
         description: 'Full resource name of the workload identity provider that trusts GitHub, projects/NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER (scripts/setup_vertex_wif.sh prints it)'
         type: string
@@ -33,10 +37,6 @@ on:
         description: 'Email of the service account the job signs in as; it needs only aiplatform.endpoints.predict'
         type: string
         required: true
-      vertex_location:
-        description: 'Vertex AI location: global, or a region such as us-central1 that serves the model'
-        type: string
-        default: 'global'
       max_total_lines:
         description: 'Max total source lines per Gemini call'
         type: number
@@ -94,15 +94,18 @@ jobs:
     # caller's API quota; only people with a role in the repo may trigger it.
     # Private repos skip the check: only people with access can comment, and
     # author_association can misreport private org membership.
+    # A comment counts only when it is new: an edited or deleted one would
+    # bill another review.
     if: >
       github.event_name == 'pull_request' ||
+      (github.event.action == 'created' &&
       ((github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
         contains(github.event.comment.body, '@gemini')) ||
        (github.event_name == 'pull_request_review_comment' &&
         contains(github.event.comment.body, '@gemini'))) &&
       (github.event.repository.private ||
-       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)))
     runs-on: ${{ fromJSON(inputs.runner) }}
     concurrency:
       group: gemini-review-vertex-${{ github.event.pull_request.number || github.event.issue.number }}
@@ -173,6 +176,7 @@ jobs:
         run: rm -rf -- .claude-review-action
 
       - name: Checkout review action repo (prompts)
+        id: action-checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # This workflow's own repository and commit, always: there is no ref
@@ -303,7 +307,8 @@ jobs:
           # parsing, never follows a PR's symlinks, and cuts on whole UTF-8
           # characters. It prints the number of calls.
           rm -rf /tmp/review-chunks
-          CALLS=$(python3 "$ROOT/scripts/gemini_chunks.py" /tmp/review-chunks)
+          # -s -E, not -I: the script imports safe_path.py from its own folder.
+          CALLS=$(python3 -s -E "$ROOT/scripts/gemini_chunks.py" /tmp/review-chunks)
           echo "calls=${CALLS}" >> "$GITHUB_OUTPUT"
 
           # The review rules come from the pull request's base commit, never its
@@ -360,6 +365,8 @@ jobs:
           workload_identity_provider: ${{ inputs.workload_identity_provider }}
           service_account: ${{ inputs.service_account }}
           token_format: access_token
+          # Long enough for three tries of the slowest call; the default is an hour.
+          access_token_lifetime: 1800s
           create_credentials_file: false
           export_environment_variables: false
 
@@ -390,6 +397,12 @@ jobs:
             bearer) AUTH_HEADER="Authorization: Bearer ${GEMINI_API_KEY}" ;;
             *) echo "::error::AUTH_SCHEME must be key or bearer, got '${AUTH_SCHEME}'"; exit 1 ;;
           esac
+          # curl reads the header from a private file, so the credential is not
+          # on its command line, where other processes on the runner can see it.
+          AUTH_FILE=$(umask 077; mktemp "${RUNNER_TEMP:-/tmp}/gemini-auth.XXXXXX")
+          trap 'rm -f "$AUTH_FILE"' EXIT
+          printf '%s\n' "$AUTH_HEADER" > "$AUTH_FILE"
+          unset AUTH_HEADER GEMINI_API_KEY  # the scripts below need neither
           # Only a known level reaches the request body, so the input cannot add JSON.
           # gemini-4-argon does no thinking unless asked; with high it found the most
           # defects and no false ones in a blind comparison (jadedm/sandbox#101).
@@ -436,7 +449,7 @@ jobs:
               http=$(curl -s -w "%{http_code}" -o "$result" \
                 "$API_URL" \
                 -H 'Content-Type: application/json' \
-                -H "$AUTH_HEADER" \
+                -H @"$AUTH_FILE" \
                 --max-time 420 \
                 -X POST \
                 -d @- <<CURL_EOF
@@ -475,7 +488,7 @@ jobs:
             # reply was unreadable, and the raw text stays in this log only.
             python3 -I -c 'import json, sys; u = json.load(open(sys.argv[1])).get("usageMetadata", {}); print("Tokens: prompt %s, thinking %s, output %s" % (u.get("promptTokenCount"), u.get("thoughtsTokenCount", "not reported"), u.get("candidatesTokenCount")))' "$result" 2>/dev/null || echo "Tokens: unreadable"
             rc=0
-            python3 .claude-review-action/scripts/gemini_review_parse.py "$result" "$dir/review.json" || rc=$?
+            python3 -I .claude-review-action/scripts/gemini_review_parse.py "$result" "$dir/review.json" || rc=$?
             if [ "$rc" -eq 0 ]; then echo ok > "$dir/status"; return 0; fi
             if [ "$rc" -eq 2 ]; then echo unreadable > "$dir/status"; return 0; fi
             echo failed > "$dir/status"
@@ -498,7 +511,7 @@ jobs:
           # One review from all calls. Exit 1 when every call failed; when
           # none succeeded but one was unreadable, it writes the unreadable
           # marker and the next step posts the fixed notice and fails, as before.
-          python3 .claude-review-action/scripts/gemini_review_merge.py /tmp/review-chunks /tmp/gemini-review.json /tmp/review-coverage.json
+          python3 -I .claude-review-action/scripts/gemini_review_merge.py /tmp/review-chunks /tmp/gemini-review.json /tmp/review-coverage.json
 
       - name: Post review comment
         if: steps.files.outputs.count > 0
@@ -510,7 +523,7 @@ jobs:
           # Every field Gemini returns is untrusted: it read the pull request.
           # The builder renders it inert (no mentions, links, images or HTML)
           # and keeps the comment under GitHub's size limit.
-          COMMENT=$(python3 .claude-review-action/scripts/gemini_review_comment.py /tmp/gemini-review.json /tmp/review-coverage.json)
+          COMMENT=$(python3 -I .claude-review-action/scripts/gemini_review_comment.py /tmp/gemini-review.json /tmp/review-coverage.json)
           gh pr comment ${{ github.event.pull_request.number || github.event.issue.number }} --body "$COMMENT"
 
           if python3 -I -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('nothing_sent') else 1)"; then
@@ -532,7 +545,10 @@ jobs:
           echo "issue_count=$(python3 -I -c "import json; print(len(json.load(open('/tmp/gemini-review.json')).get('issues', [])))")" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
-        if: always() && inputs.slack_notify && github.event_name == 'pull_request'
+        # always() still reports failed runs, but only once this repo's own
+        # action is in .claude-review-action: before that checkout, the folder
+        # can hold the pull request's files (#59).
+        if: always() && steps.action-checkout.outcome == 'success' && inputs.slack_notify && github.event_name == 'pull_request'
         uses: ./.claude-review-action/actions/slack-notify
         with:
           webhook_url: ${{ secrets.slack_webhook_url }}

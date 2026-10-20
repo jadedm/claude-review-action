@@ -60,6 +60,11 @@ body = sys.stdin.read()
 state = os.environ["STUB_STATE"]
 with open(os.path.join(state, "argv.jsonl"), "a") as f:
     f.write(json.dumps(args) + "\n")
+# -H @file: curl reads headers from a file; record what it would send.
+headers = [open(args[i + 1][1:]).read().strip() for i, a in enumerate(args[:-1]) if a == "-H" and args[i + 1].startswith("@")]
+headers += [args[i + 1] for i, a in enumerate(args[:-1]) if a == "-H" and not args[i + 1].startswith("@")]
+with open(os.path.join(state, "headers.jsonl"), "a") as f:
+    f.write(json.dumps(headers) + "\n")
 with open(os.path.join(state, "bodies.jsonl"), "a") as f:
     f.write(json.dumps(json.loads(body)) + "\n")  # json.loads: an invalid body fails the call
 def reply(code, payload):
@@ -121,6 +126,7 @@ def run_calls(chunk_names, thinking="high", model="m", plant=None, provider="ai_
     (bin_dir / "curl").chmod(0o755)
     state = work / "_state"
     state.mkdir()
+    (work / "_rt").mkdir()  # RUNNER_TEMP, which the runner always provides
     if chunk_names is None:
         chunk_names = []  # the planner made no calls and wrote no chunk directory
     for n, names in enumerate(chunk_names, 1):
@@ -131,7 +137,7 @@ def run_calls(chunk_names, thinking="high", model="m", plant=None, provider="ai_
         (d / "files.json").write_text(json.dumps(names))
     pathlib.Path("/tmp/review-prompt.txt").write_text("Review this.\n")
     pathlib.Path("/tmp/review-coverage.json").write_text(json.dumps({"omitted": [], "filtered": 0, "diff_sent": 0, "diff_total": 0}))
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GEMINI_API_KEY="k-SECRET-55", GEMINI_MODEL=model, STUB_STATE=str(state),
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GEMINI_API_KEY="k-SECRET-55", GEMINI_MODEL=model, STUB_STATE=str(state), RUNNER_TEMP=str(work / "_rt"),
                THINKING_LEVEL=thinking, PROVIDER=provider, API_URL=api_url, AUTH_SCHEME=auth)
     start = time.monotonic()
     proc = subprocess.run(["bash", "-e", "-c", CALL], cwd=work, env=env, capture_output=True, text=True)
@@ -143,11 +149,16 @@ def run_calls(chunk_names, thinking="high", model="m", plant=None, provider="ai_
     BODIES[:] = [json.loads(l) for l in bodies.read_text().splitlines()] if bodies.exists() else []
     argv = state / "argv.jsonl"
     ARGV[:] = [json.loads(l) for l in argv.read_text().splitlines()] if argv.exists() else []
+    hdr = state / "headers.jsonl"
+    HEADERS[:] = [json.loads(l) for l in hdr.read_text().splitlines()] if hdr.exists() else []
+    LEFT[:] = [p.name for p in (work / "_rt").glob("gemini-auth.*")]
     shutil.rmtree(work)
     return proc, review, coverage, seconds
 
 
 BODIES = []
+HEADERS = []
+LEFT = []
 ARGV = []
 
 
@@ -242,7 +253,7 @@ check("33.1 the workflow's own default is high, and the step reads the input",
 print("vertex (#55)")
 proc, review, cov, secs = run_calls([["plain.py"]])
 check("55.1 ai_studio: URL, key header and body as before (no role, lowercase level)",
-      ARGV and AI_STUDIO_URL in ARGV[0] and "X-goog-api-key: k-SECRET-55" in ARGV[0]
+      ARGV and AI_STUDIO_URL in ARGV[0] and "X-goog-api-key: k-SECRET-55" in HEADERS[0]
       and BODIES[0]["contents"] == [{"parts": [{"text": BODIES[0]["contents"][0]["parts"][0]["text"]}]}]
       and BODIES[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "high"}, (ARGV[:1], BODIES[:1]))
 text = BODIES[0]["contents"][0]["parts"][0]["text"]
@@ -252,7 +263,7 @@ check("55.1 ai_studio: the whole body is the old shape, key for key",
 proc, review, cov, secs = run_calls([["plain.py"]], provider="vertex", api_url=VERTEX_URL)
 check("55.2 vertex: the Vertex URL, the key header, role user, level HIGH, and a review",
       proc.returncode == 0 and review["summary"] == "plain" and ARGV and VERTEX_URL in ARGV[0] and AI_STUDIO_URL not in ARGV[0]
-      and "X-goog-api-key: k-SECRET-55" in ARGV[0] and BODIES[0]["contents"][0].get("role") == "user"
+      and "X-goog-api-key: k-SECRET-55" in HEADERS[0] and BODIES[0]["contents"][0].get("role") == "user"
       and BODIES[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "HIGH"}, (proc.stdout[-300:], ARGV[:1], BODIES[:1]))
 for level, want in (("none", None), ("", None), ("low", "LOW"), ("medium", "MEDIUM"), ("high", "HIGH")):
     proc, review, cov, secs = run_calls([["plain.py"]], thinking=level, provider="vertex", api_url=VERTEX_URL)
@@ -276,7 +287,7 @@ proc, review, cov, secs = run_calls([["fail403.py"], ["timeout.py"]], provider="
 check("55.8 the key is never in the log, on success or error", "k-SECRET-55" not in proc.stdout + proc.stderr, proc.stdout[-300:])
 proc, review, cov, secs = run_calls([["plain.py"]], provider="vertex", api_url=VERTEX_URL, auth="bearer")
 check("B4 bearer: Authorization Bearer is sent and no X-goog-api-key",
-      proc.returncode == 0 and ARGV and "Authorization: Bearer k-SECRET-55" in ARGV[0] and not any("X-goog-api-key" in a for a in ARGV[0]),
+      proc.returncode == 0 and HEADERS and "Authorization: Bearer k-SECRET-55" in HEADERS[0] and not any("X-goog-api-key" in h for h in HEADERS[0]),
       ARGV[:1])
 for bad in ("typo", "", "Bearer"):
     proc, review, cov, secs = run_calls([["plain.py"]], auth=bad)
@@ -284,6 +295,11 @@ for bad in ("typo", "", "Bearer"):
           (proc.returncode, proc.stdout[-200:]))
 proc, review, cov, secs = run_calls([["fail403.py"], ["plain.py"]], provider="vertex", api_url=VERTEX_URL, auth="bearer")
 check("B8 a bearer token is never in the log", "k-SECRET-55" not in proc.stdout + proc.stderr, proc.stdout[-300:])
+proc, review, cov, secs = run_calls([["plain.py"], ["fast.py"]])
+check("S4 the credential reaches curl through a file, never on its command line",
+      len(ARGV) == 2 and not any("k-SECRET-55" in a for argv in ARGV for a in argv) and all(any("k-SECRET-55" in h for h in hs) for hs in HEADERS),
+      (ARGV[:1], HEADERS))
+check("S4 the header file is gone when the step ends", proc.returncode == 0 and LEFT == [], LEFT)
 wf = WORKFLOW.read_text()
 check("B3 gemini-review.yml sends the key header by default", "          AUTH_SCHEME: key" in wf and "AUTH_SCHEME: bearer" not in wf)
 proc, review, cov, secs = run_calls([["plain.py"]], api_url="")

@@ -99,6 +99,14 @@ check("B6 no provider input", "      provider:\n" not in inputs)
 check("B6 no gemini_api_key secret, only the optional Slack one", "gemini_api_key" not in secrets and "slack_webhook_url" in secrets, secrets)
 perms = block(VERTEX, "\npermissions:\n", "\njobs:")
 check("B6 the workflow asks for id-token: write", "  id-token: write" in perms, perms)
+check("S3 the access token lasts 30 minutes, not the default hour", "          access_token_lifetime: 1800s" in LINES)
+for label, text in (("gemini-review.yml", MAIN), ("gemini-review-vertex.yml", VERTEX)):
+    job_if = text.split("\n    if: >\n", 1)[1].split("\n    runs-on:", 1)[0]
+    check(f"S6 {label}: a comment counts only when created", "github.event.action == 'created'" in job_if
+          and job_if.strip().startswith("github.event_name == 'pull_request' ||"), job_if[:200])
+    calls = [l.strip() for l in text.splitlines() if "python3 " in l and "scripts/" in l and not l.strip().startswith("#")]
+    loose = [c for c in calls if "python3 -I " not in c and "python3 -s -E " not in c]
+    check(f"S5 {label}: every script runs isolated from user site-packages and PYTHON* settings", calls and not loose, loose)
 code = [l for l in LINES if not l.strip().startswith("#")]
 check("B20 no ref input, and the action checkout uses only the workflow's own commit",
       "      ref:" not in inputs and "inputs.ref" not in VERTEX and "          ref: ${{ job.workflow_sha || 'v1' }}" in LINES)

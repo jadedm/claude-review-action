@@ -56,9 +56,9 @@ check("55.13 it is the job's first step", START == first, (START, first))
 check("55.13 it has no if:, so a pull request with nothing to send still runs it",
       not any(l.strip().startswith("if:") for l in STEP), STEP[:3])
 check("55.3 the Call step reads the URL from it", "          API_URL: ${{ steps.provider.outputs.api_url }}" in LINES)
-check("55.1 provider defaults to ai_studio and location to global",
-      "        default: 'ai_studio'" in LINES[LINES.index("      provider:"):LINES.index("      provider:") + 4]
-      and "        default: 'global'" in LINES[LINES.index("      vertex_location:"):LINES.index("      vertex_location:") + 4])
+check("S1 gemini-review.yml has no provider or Vertex inputs, and its check step is fixed to AI Studio",
+      not [l for l in LINES if l in ("      provider:", "      vertex_project:", "      vertex_location:")]
+      and "          PROVIDER: ai_studio" in STEP and "inputs.provider" not in "\n".join(LINES))
 
 print("URLs")
 p, url = run()

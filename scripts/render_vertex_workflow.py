@@ -41,6 +41,8 @@ AUTH_STEP = f"""      - name: Sign in to Google Cloud
           workload_identity_provider: ${{{{ inputs.workload_identity_provider }}}}
           service_account: ${{{{ inputs.service_account }}}}
           token_format: access_token
+          # Long enough for three tries of the slowest call; the default is an hour.
+          access_token_lifetime: 1800s
           create_credentials_file: false
           export_environment_variables: false
 
@@ -50,18 +52,16 @@ AUTH_STEP = f"""      - name: Sign in to Google Cloud
 # (old text, new text, times the old text must occur)
 CHANGES = [
     ("name: Gemini Review (reusable)\n", HEADER + "name: Gemini Review via Vertex AI (reusable)\n", 1),
-    ("""      provider:
-        description: 'Where Gemini is called: ai_studio (the Gemini API, default) or vertex (Vertex AI on Google Cloud billing, with a Google Cloud API key restricted to the Vertex AI API in gemini_api_key) (#55)'
-        type: string
-        default: 'ai_studio'
+    ("""        default: 'high'
+""", """        default: 'high'
       vertex_project:
-        description: 'Google Cloud project ID that Vertex AI bills to. Required when provider is vertex'
-        type: string
-        default: ''
-""", """      vertex_project:
         description: 'Google Cloud project ID that Vertex AI bills to'
         type: string
         required: true
+      vertex_location:
+        description: 'Vertex AI location: global, or a region such as us-central1 that serves the model'
+        type: string
+        default: 'global'
       workload_identity_provider:
         description: 'Full resource name of the workload identity provider that trusts GitHub, projects/NUMBER/locations/global/workloadIdentityPools/POOL/providers/PROVIDER (scripts/setup_vertex_wif.sh prints it)'
         type: string
@@ -98,7 +98,16 @@ CHANGES = [
   # The caller must grant this too; a called workflow cannot raise its caller's permissions.
   id-token: write
 """, 1),
-    ("          PROVIDER: ${{ inputs.provider }}\n", "          PROVIDER: vertex\n", 2),
+    ("""          # This file calls AI Studio. gemini-review-vertex.yml, generated from
+          # it, sets vertex and its own project and location (#55).
+          PROVIDER: ai_studio
+          VERTEX_PROJECT: ''
+          VERTEX_LOCATION: ''
+""", """          PROVIDER: vertex
+          VERTEX_PROJECT: ${{ inputs.vertex_project }}
+          VERTEX_LOCATION: ${{ inputs.vertex_location }}
+""", 1),
+    ("          PROVIDER: ai_studio\n", "          PROVIDER: vertex\n", 1),
     ("          GEMINI_API_KEY: ${{ secrets.gemini_api_key }}\n", "          GEMINI_API_KEY: ${{ steps.auth.outputs.access_token }}\n", 1),
     ("          AUTH_SCHEME: key\n", "          AUTH_SCHEME: bearer\n", 1),
     # Its own concurrency group: with gemini-review.yml's, a repo running both
