@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The release protections for this repo, as code (sandbox#60).
 
-    python3 scripts/apply_repo_protection.py --repo jadedm/claude-review-action            # report only
-    python3 scripts/apply_repo_protection.py --repo jadedm/claude-review-action --apply    # create what is missing
+    python3 scripts/apply_repo_protection.py --repo jadedm/pr-review-workflows            # report only
+    python3 scripts/apply_repo_protection.py --repo jadedm/pr-review-workflows --apply    # create what is missing
 
 Every caller runs this repo's workflows with its own secrets, so:
   - tags v*: only a repo admin may create, move or delete them (the release step moves v1);
