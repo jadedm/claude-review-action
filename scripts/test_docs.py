@@ -127,7 +127,7 @@ print("line references")
 # The exact citation in the README, the file, the lines, and text that must be on them.
 CITES = [
     ("`claude-review.yml:137`", "claude-review.yml", 137, 137, "scripts/base_file.py"),
-    ("`gemini-review.yml:257`", "gemini-review.yml", 257, 257, "scripts/base_file.py"),
+    ("`gemini-review.yml:313`", "gemini-review.yml", 313, 313, "scripts/base_file.py"),
     ("`claude-review.yml:63`", "claude-review.yml", 63, 63, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
     ("`:78`", "claude-review.yml", 78, 78, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
     ("`:169`", "claude-review.yml", 169, 169, "anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9"),
@@ -136,7 +136,7 @@ CITES = [
     ("`claude-review.yml:247`", "claude-review.yml", 247, 247, "Say when Claude did not review"),
     ("`claude-review.yml:211-213`", "claude-review.yml", 211, 213, "--disallowedTools \"Edit,MultiEdit,Write"),
     ("`claude-review.yml:42-50`", "claude-review.yml", 42, 50, '["OWNER","MEMBER","COLLABORATOR"]'),
-    ("`gemini-review.yml:83-91`", "gemini-review.yml", 83, 91, '["OWNER","MEMBER","COLLABORATOR"]'),
+    ("`gemini-review.yml:95-103`", "gemini-review.yml", 95, 103, '["OWNER","MEMBER","COLLABORATOR"]'),
 ]
 for cite, name, start, end, needle in CITES:
     lines = (WF / name).resolve().read_text().splitlines()[start - 1:end]

@@ -23,6 +23,18 @@ on:
         description: 'How hard Gemini thinks before reviewing: minimal, low, medium or high. none or an empty value sends no thinking setting, which leaves gemini-4-argon not thinking at all; ignored for gemini-1.x and 2.x models (#33)'
         type: string
         default: 'high'
+      provider:
+        description: 'Where Gemini is called: ai_studio (the Gemini API, default) or vertex (Vertex AI on Google Cloud billing, with a Google Cloud API key restricted to the Vertex AI API in gemini_api_key) (#55)'
+        type: string
+        default: 'ai_studio'
+      vertex_project:
+        description: 'Google Cloud project ID that Vertex AI bills to. Required when provider is vertex'
+        type: string
+        default: ''
+      vertex_location:
+        description: 'Vertex AI location: global, or a region such as us-central1 that serves the model'
+        type: string
+        default: 'global'
       max_total_lines:
         description: 'Max total source lines per Gemini call'
         type: number
@@ -94,6 +106,50 @@ jobs:
       group: gemini-review-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: true
     steps:
+      - name: Check the provider
+        # Its own step, before anything else, so a wrong setting fails every
+        # run, including one whose files are all filtered and that calls
+        # nothing. The model, project and location become part of the URL, so
+        # only plain names pass.
+        id: provider
+        env:
+          PROVIDER: ${{ inputs.provider }}
+          VERTEX_PROJECT: ${{ inputs.vertex_project }}
+          VERTEX_LOCATION: ${{ inputs.vertex_location }}
+          GEMINI_MODEL: ${{ inputs.model }}
+          THINKING_LEVEL: ${{ inputs.thinking_level }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$GEMINI_MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "::error::model must be a plain model name such as gemini-4-argon, got '${GEMINI_MODEL}'"; exit 1
+          fi
+          case "$PROVIDER" in
+            ai_studio)
+              echo "api_url=https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
+            vertex) ;;
+            *) echo "::error::provider must be ai_studio or vertex, got '${PROVIDER}'"; exit 1 ;;
+          esac
+          if [ -z "$VERTEX_PROJECT" ]; then
+            echo "::error::provider vertex needs vertex_project, the Google Cloud project ID that Vertex AI bills to"; exit 1
+          fi
+          if ! [[ "$VERTEX_PROJECT" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]]; then
+            echo "::error::vertex_project must be a Google Cloud project ID, got '${VERTEX_PROJECT}'"; exit 1
+          fi
+          # Google's Vertex guide for gemini-4-argon lists LOW, MEDIUM and HIGH
+          # and says MINIMAL returns 400; other models are left to Vertex.
+          if [ "$THINKING_LEVEL" = "minimal" ] && [[ "$GEMINI_MODEL" == gemini-4-argon* ]]; then
+            echo "::error::Vertex AI does not take thinking_level minimal for ${GEMINI_MODEL}; use low, medium, high or none"; exit 1
+          fi
+          # global has its own host; a region has a regional one.
+          host=""
+          [ "$VERTEX_LOCATION" = "global" ] && host="aiplatform.googleapis.com"
+          [[ "$VERTEX_LOCATION" =~ ^[a-z]+-[a-z]+[0-9]+$ ]] && host="${VERTEX_LOCATION}-aiplatform.googleapis.com"
+          if [ -z "$host" ]; then
+            echo "::error::vertex_location must be global or a region such as us-central1, got '${VERTEX_LOCATION}'"; exit 1
+          fi
+          echo "api_url=https://${host}/v1/projects/${VERTEX_PROJECT}/locations/${VERTEX_LOCATION}/publishers/google/models/${GEMINI_MODEL}:generateContent" >> "$GITHUB_OUTPUT"
+
       - name: Checkout consumer repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -297,15 +353,24 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.gemini_api_key }}
           GEMINI_MODEL: ${{ inputs.model }}
           THINKING_LEVEL: ${{ inputs.thinking_level }}
+          PROVIDER: ${{ inputs.provider }}
+          API_URL: ${{ steps.provider.outputs.api_url }}
         run: |
           set -euo pipefail
           PROMPT=$(cat /tmp/review-prompt.txt)
+          # Both hosts take the key in X-goog-api-key. Vertex wants the turn's
+          # role and the level in capitals (#55); AI Studio's request is unchanged.
+          SERVICE="Gemini API" ROLE="" LEVEL="$THINKING_LEVEL"
+          if [ "$PROVIDER" = "vertex" ]; then
+            SERVICE="Vertex AI" ROLE='"role": "user", ' LEVEL=$(printf '%s' "$THINKING_LEVEL" | tr '[:lower:]' '[:upper:]')
+          fi
+          if [ -z "$API_URL" ]; then echo "::error::no API URL; the Check the provider step did not run"; exit 1; fi
           # Only a known level reaches the request body, so the input cannot add JSON.
           # gemini-4-argon does no thinking unless asked; with high it found the most
           # defects and no false ones in a blind comparison (jadedm/sandbox#101).
           case "$THINKING_LEVEL" in
             ""|none) THINKING="" ;;
-            minimal|low|medium|high) THINKING=", \"thinkingConfig\": {\"thinkingLevel\": \"${THINKING_LEVEL}\"}" ;;
+            minimal|low|medium|high) THINKING=", \"thinkingConfig\": {\"thinkingLevel\": \"${LEVEL}\"}" ;;
             *) echo "::error::thinking_level must be none, minimal, low, medium or high, got '${THINKING_LEVEL}'"; exit 1 ;;
           esac
           # Gemini 1.x and 2.x take thinkingBudget, not thinkingLevel, and answer
@@ -315,7 +380,6 @@ jobs:
               [ -n "$THINKING" ] && echo "::notice::${GEMINI_MODEL} does not take thinking_level; sending none"
               THINKING="" ;;
           esac
-          API_URL="https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent"
 
           # Thinking models spend output tokens on thinking, and they count
           # against maxOutputTokens. A 5,000-line payload took 110 s and 15,420
@@ -352,7 +416,7 @@ jobs:
                 -X POST \
                 -d @- <<CURL_EOF
           {
-            "contents": [{"parts": [{"text": ${escaped}}]}],
+            "contents": [{${ROLE}"parts": [{"text": ${escaped}}]}],
             "generationConfig": {
               "maxOutputTokens": 65536,
               "temperature": 1.0,
@@ -362,13 +426,13 @@ jobs:
           CURL_EOF
               ) || rc=$?
               if [ "$rc" -ne 0 ]; then
-                echo "Gemini API request failed (curl exit ${rc}; 28 means no reply within 420 s)"
+                echo "${SERVICE} request failed (curl exit ${rc}; 28 means no reply within 420 s)"
                 echo failed > "$dir/status"
                 return 0
               fi
               if [ "$http" = "200" ]; then break; fi
               if [ "$http" != "429" ] && [ "$http" != "503" ]; then
-                echo "Gemini API error (HTTP ${http}):"
+                echo "${SERVICE} error (HTTP ${http}):"
                 cat "$result"; echo
                 echo failed > "$dir/status"
                 return 0
@@ -376,7 +440,7 @@ jobs:
               [ "$attempt" -lt 3 ] && sleep $((5 * attempt))
             done
             if [ "$http" != "200" ]; then
-              echo "Gemini API failed after 3 attempts (last HTTP ${http}):"
+              echo "${SERVICE} failed after 3 attempts (last HTTP ${http}):"
               cat "$result"; echo
               echo failed > "$dir/status"
               return 0

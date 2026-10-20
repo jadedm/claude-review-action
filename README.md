@@ -86,13 +86,13 @@ About five minutes for both reviewers.
 
 Each point names the file that does it.
 
-- **The review rules come from the base branch.** Your repo's rules file (`extra_prompt_path`) is read from the pull request's base commit (the base branch as the pull request records it) through the GitHub API, never from the pull request, so a pull request cannot rewrite the rules its own review follows. [`scripts/base_file.py`](scripts/base_file.py), called at `claude-review.yml:137` and `gemini-review.yml:257`.
+- **The review rules come from the base branch.** Your repo's rules file (`extra_prompt_path`) is read from the pull request's base commit (the base branch as the pull request records it) through the GitHub API, never from the pull request, so a pull request cannot rewrite the rules its own review follows. [`scripts/base_file.py`](scripts/base_file.py), called at `claude-review.yml:137` and `gemini-review.yml:313`.
 - **Every third-party action is pinned to a commit.** Whoever controls an upstream repo can move its tags, and these steps hold your tokens. The pins are at `claude-review.yml:63`, `:78` and `:169`; [`.github/dependabot.yml`](.github/dependabot.yml) opens a pull request each week when a pinned action has a newer release.
 - **Model output is made safe before it is posted.** Gemini reads the pull request, so its reply is treated as untrusted: no @-mentions, links, images, HTML or bidirectional control characters reach the comment, and each field is capped. [`scripts/gemini_review_comment.py`](scripts/gemini_review_comment.py), lines 32 to 66.
 - **Large pull requests are split, and the comment says what was not reviewed.** A pull request over the per-call limits is split into up to `max_chunks` parallel calls whose findings merge into one comment. Files that fit no call are listed under "Not reviewed" with the reason. [`scripts/gemini_chunks.py`](scripts/gemini_chunks.py), [`scripts/gemini_review_merge.py`](scripts/gemini_review_merge.py), and the list at `gemini_review_comment.py:91-127`.
 - **When Claude does not review, the pull request says so.** claude-code-action can skip a review and still show a green check. This posts one comment naming the cause and a warning in the run, and the Slack message says "Not reviewed". `claude-review.yml:247`.
 - **The Claude reviewer is denied writes.** File edits, commits, pushes, tags and `gh` are denied, and so are reads of the places on a runner known to hold credentials. These are deny rules for named tools and paths, not a sandbox; see Security below. `claude-review.yml:211-213`.
-- **Strangers cannot spend your quota.** On a public repo only owners, members and collaborators can start a review by comment. `claude-review.yml:42-50`, `gemini-review.yml:83-91`.
+- **Strangers cannot spend your quota.** On a public repo only owners, members and collaborators can start a review by comment. `claude-review.yml:42-50`, `gemini-review.yml:95-103`.
 - **Two model families.** Claude and Gemini review independently. They miss different things, and where they disagree is often the most useful part of the review.
 
 The workflow files are in [`.github/workflows/`](.github/workflows).
@@ -109,8 +109,33 @@ What this repo does not do yet: review only the commits since the last review, e
 
 - **Claude** uses the Claude subscription behind the OAuth token; reviews count against that plan's usage limits.
 - **Gemini** bills per token to the key's Google project. Measured on ten of our own merged pull requests in October 2026, `gemini-4-argon` with thinking `high` cost $2.26 in total at Google's listed rates, about $0.23 a review, with a median of 78 seconds a call. `model: gemini-3.8-flash` cost about half as much on the same ten.
+- With `provider: vertex`, Gemini bills to the Google Cloud project instead, under Vertex AI's quotas rather than AI Studio's tier spend caps.
 - A pull request split into chunks costs one call per chunk, so up to `max_chunks` times a single review.
 - Runner minutes are your own. Set `runner` to use a self-hosted runner.
+
+## Gemini through Vertex AI
+
+AI Studio stops calls when a billing account reaches its [tier's monthly spend cap](https://aistudio.google.com/docs/billing#tier-spend-caps). Vertex AI bills the same models to a Google Cloud project instead. Locations are `global` or a region; the multi-region names `us` and `eu` are not accepted.
+
+1. Create a key restricted to the Vertex AI API and bound to a service account whose only permission is `aiplatform.endpoints.predict`, the one `generateContent` needs. [`scripts/create_vertex_key.sh`](scripts/create_vertex_key.sh) prints what it would do; `--apply` does it and writes the key to a file without printing it:
+
+   ```bash
+   scripts/create_vertex_key.sh --project YOUR_PROJECT_ID --apply
+   test -s /tmp/.vertex-gemini && gh secret set GEMINI_VERTEX_API_KEY --repo OWNER/REPO < /tmp/.vertex-gemini
+   ```
+
+2. In `gemini.yml`:
+
+   ```yaml
+       with:
+         stack: python
+         provider: vertex
+         vertex_project: YOUR_PROJECT_ID
+       secrets:
+         gemini_api_key: ${{ secrets.GEMINI_VERTEX_API_KEY }}
+   ```
+
+No permission changes: the key goes in the same secret slot, so the caller's `permissions:` block stays as in the quickstart.
 
 ## Repo-specific rules
 
@@ -147,7 +172,10 @@ If both are set, the file comes first. Claude also reads the repo's `CLAUDE.md` 
 | Input | Type | Default | Description |
 |---|---|---|---|
 | `model` | string | `gemini-4-argon` | Gemini model ID |
-| `thinking_level` | string | `high` | `minimal`, `low`, `medium`, `high`, or `none` (or empty) to send no thinking setting. Ignored for `gemini-1.x` and `gemini-2.x` |
+| `thinking_level` | string | `high` | `minimal`, `low`, `medium`, `high`, or `none` (or empty) to send no thinking setting. Ignored for `gemini-1.x` and `gemini-2.x`. Vertex AI does not take `minimal` for `gemini-4-argon` |
+| `provider` | string | `ai_studio` | `ai_studio` calls the Gemini API; `vertex` calls Vertex AI on Google Cloud billing (see "Gemini through Vertex AI") |
+| `vertex_project` | string | `''` | Google Cloud project ID Vertex AI bills to. Required with `provider: vertex` |
+| `vertex_location` | string | `global` | `global`, or a region such as `us-central1` that serves the model |
 | `max_total_lines` | number | `20000` | Source lines per call |
 | `max_per_file` | number | `3000` | For a file with more lines than this, send only its diff, not its full source |
 | `max_files` | number | `50` | Files per call |

@@ -73,7 +73,7 @@ def review(summary):
     n = sum(map(ord, summary)) % 1000  # distinct per file, so each call's log line can be told apart
     return json.dumps({"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}],
                        "usageMetadata": {"promptTokenCount": n, "thoughtsTokenCount": n + 1, "candidatesTokenCount": n + 2}})
-name = next((n for n in ("fail500", "timeout", "flaky429", "unreadable", "notjson", "slow", "fast", "plain") if f"--- {n}.py ---" in body), "plain")
+name = next((n for n in ("fail500", "timeout", "flaky429", "flaky503", "fail403", "unreadable", "notjson", "slow", "fast", "plain") if f"--- {n}.py ---" in body), "plain")
 if name == "fail500":
     reply(500, '{"error": {"message": "boom"}}')
 if name == "timeout":
@@ -83,6 +83,13 @@ if name == "flaky429":
     if not os.path.exists(marker):
         open(marker, "w").close()
         reply(429, '{"error": {"message": "slow down"}}')
+if name == "flaky503":
+    marker = os.path.join(state, "flaky503")
+    if not os.path.exists(marker):
+        open(marker, "w").close()
+        reply(503, '{"error": {"message": "unavailable"}}')
+if name == "fail403":
+    reply(403, '{"error": {"code": 403, "status": "PERMISSION_DENIED"}}')
 if name == "unreadable":
     reply(200, json.dumps({"candidates": [{"content": {"parts": [{"text": "not a review"}]}, "finishReason": "STOP"}]}))
 if name == "notjson":
@@ -93,7 +100,11 @@ reply(200, review(name))
 '''
 
 
-def run_calls(chunk_names, thinking="high", model="m", plant=None):
+AI_STUDIO_URL = "https://generativelanguage.googleapis.com/v1beta/models/m:generateContent"
+VERTEX_URL = "https://aiplatform.googleapis.com/v1/projects/proj-55/locations/global/publishers/google/models/m:generateContent"
+
+
+def run_calls(chunk_names, thinking="high", model="m", plant=None, provider="ai_studio", api_url=AI_STUDIO_URL):
     """chunk_names: one list of file names per call. Returns (proc, review, coverage, seconds).
     The request bodies the stub received are in BODIES after the call."""
     shutil.rmtree(CHUNKS, ignore_errors=True)
@@ -120,8 +131,8 @@ def run_calls(chunk_names, thinking="high", model="m", plant=None):
         (d / "files.json").write_text(json.dumps(names))
     pathlib.Path("/tmp/review-prompt.txt").write_text("Review this.\n")
     pathlib.Path("/tmp/review-coverage.json").write_text(json.dumps({"omitted": [], "filtered": 0, "diff_sent": 0, "diff_total": 0}))
-    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GEMINI_API_KEY="k", GEMINI_MODEL=model, STUB_STATE=str(state),
-               THINKING_LEVEL=thinking)
+    env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GEMINI_API_KEY="k-SECRET-55", GEMINI_MODEL=model, STUB_STATE=str(state),
+               THINKING_LEVEL=thinking, PROVIDER=provider, API_URL=api_url)
     start = time.monotonic()
     proc = subprocess.run(["bash", "-e", "-c", CALL], cwd=work, env=env, capture_output=True, text=True)
     seconds = time.monotonic() - start
@@ -227,6 +238,45 @@ at = wf.index("      thinking_level:")
 block = wf[at + 1:at + 4]  # description, type, default
 check("33.1 the workflow's own default is high, and the step reads the input",
       "        default: 'high'" in block and "          THINKING_LEVEL: ${{ inputs.thinking_level }}" in wf, block)
+
+print("vertex (#55)")
+proc, review, cov, secs = run_calls([["plain.py"]])
+check("55.1 ai_studio: URL, key header and body as before (no role, lowercase level)",
+      ARGV and AI_STUDIO_URL in ARGV[0] and "X-goog-api-key: k-SECRET-55" in ARGV[0]
+      and BODIES[0]["contents"] == [{"parts": [{"text": BODIES[0]["contents"][0]["parts"][0]["text"]}]}]
+      and BODIES[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "high"}, (ARGV[:1], BODIES[:1]))
+text = BODIES[0]["contents"][0]["parts"][0]["text"]
+check("55.1 ai_studio: the whole body is the old shape, key for key",
+      BODIES[0] == {"contents": [{"parts": [{"text": text}]}], "generationConfig": {"maxOutputTokens": 65536, "temperature": 1.0,
+                    "responseMimeType": "application/json", "thinkingConfig": {"thinkingLevel": "high"}}}, BODIES[:1])
+proc, review, cov, secs = run_calls([["plain.py"]], provider="vertex", api_url=VERTEX_URL)
+check("55.2 vertex: the Vertex URL, the key header, role user, level HIGH, and a review",
+      proc.returncode == 0 and review["summary"] == "plain" and ARGV and VERTEX_URL in ARGV[0] and AI_STUDIO_URL not in ARGV[0]
+      and "X-goog-api-key: k-SECRET-55" in ARGV[0] and BODIES[0]["contents"][0].get("role") == "user"
+      and BODIES[0]["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "HIGH"}, (proc.stdout[-300:], ARGV[:1], BODIES[:1]))
+for level, want in (("none", None), ("", None), ("low", "LOW"), ("medium", "MEDIUM"), ("high", "HIGH")):
+    proc, review, cov, secs = run_calls([["plain.py"]], thinking=level, provider="vertex", api_url=VERTEX_URL)
+    got = BODIES[0]["generationConfig"].get("thinkingConfig") if BODIES else "no call"
+    check(f"55.14 vertex thinking_level {level!r}: {want or 'no thinkingConfig'}",
+          got == ({"thinkingLevel": want} if want else None), got)
+proc, review, cov, secs = run_calls([["flaky429.py"]], provider="vertex", api_url=VERTEX_URL)
+check("55.6 vertex 429 then success: retried and posted", proc.returncode == 0 and review["summary"] == "flaky429" and len(BODIES) == 2,
+      (proc.stdout[-300:], len(BODIES)))
+proc, review, cov, secs = run_calls([["flaky503.py"]], provider="vertex", api_url=VERTEX_URL)
+check("55.15 vertex 503 then success: retried and posted", proc.returncode == 0 and review["summary"] == "flaky503" and len(BODIES) == 2,
+      (proc.stdout[-300:], len(BODIES)))
+proc, review, cov, secs = run_calls([["fail403.py"]], provider="vertex", api_url=VERTEX_URL)
+check("55.6b vertex 403: the step fails and the log names Vertex AI and the status",
+      proc.returncode != 0 and "Vertex AI error (HTTP 403)" in proc.stdout and "PERMISSION_DENIED" in proc.stdout and "Gemini API" not in proc.stdout,
+      (proc.returncode, proc.stdout[-400:]))
+proc, review, cov, secs = run_calls([["plain.py"], ["slow.py"], ["fast.py"]], provider="vertex", api_url=VERTEX_URL)
+check("55.7 three chunks on vertex: every request goes to the Vertex URL",
+      len(ARGV) == 3 and all(VERTEX_URL in a and AI_STUDIO_URL not in a for a in ARGV), [a[:3] for a in ARGV])
+proc, review, cov, secs = run_calls([["fail403.py"], ["timeout.py"]], provider="vertex", api_url=VERTEX_URL)
+check("55.8 the key is never in the log, on success or error", "k-SECRET-55" not in proc.stdout + proc.stderr, proc.stdout[-300:])
+proc, review, cov, secs = run_calls([["plain.py"]], api_url="")
+check("55.3 no API URL (the check step did not run): fails before any call",
+      proc.returncode != 0 and BODIES == [] and "no API URL" in proc.stdout, (proc.returncode, proc.stdout[-200:]))
 
 shutil.rmtree(CHUNKS, ignore_errors=True)
 for p in TMP:
