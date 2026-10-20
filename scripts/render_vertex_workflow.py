@@ -86,6 +86,9 @@ CHANGES = [
     ("          PROVIDER: ${{ inputs.provider }}\n", "          PROVIDER: vertex\n", 2),
     ("          GEMINI_API_KEY: ${{ secrets.gemini_api_key }}\n", "          GEMINI_API_KEY: ${{ steps.auth.outputs.access_token }}\n", 1),
     ("          AUTH_SCHEME: key\n", "          AUTH_SCHEME: bearer\n", 1),
+    # Its own concurrency group: with gemini-review.yml's, a repo running both
+    # had one cancel the other's run on the same pull request (seen live).
+    ("      group: gemini-review-${{", "      group: gemini-review-vertex-${{", 1),
     ("      - name: Call Gemini API\n", AUTH_STEP, 1),
 ]
 

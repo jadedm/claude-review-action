@@ -93,6 +93,8 @@ check("B6 no provider input", "      provider:\n" not in inputs)
 check("B6 no gemini_api_key secret, only the optional Slack one", "gemini_api_key" not in secrets and "slack_webhook_url" in secrets, secrets)
 perms = block(VERTEX, "\npermissions:\n", "\njobs:")
 check("B6 the workflow asks for id-token: write", "  id-token: write" in perms, perms)
+check("B19 its concurrency group differs from gemini-review.yml's, so neither cancels the other",
+      "      group: gemini-review-vertex-${{" in VERTEX and "      group: gemini-review-${{" in MAIN and "      group: gemini-review-${{" not in VERTEX)
 
 auth_at, auth = step(LINES, "Sign in to Google Cloud")
 text = "\n".join(auth)

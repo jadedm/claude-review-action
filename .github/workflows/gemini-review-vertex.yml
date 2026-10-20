@@ -109,7 +109,7 @@ jobs:
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     runs-on: ${{ fromJSON(inputs.runner) }}
     concurrency:
-      group: gemini-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      group: gemini-review-vertex-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: true
     steps:
       - name: Check the provider
