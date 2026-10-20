@@ -1,268 +1,218 @@
 # pr-review-workflows
 
-Reusable GitHub Actions workflows for running AI code review on every pull request. Two parallel reviewers, severity-rated findings, optional Slack notification.
+Two AI reviewers on every pull request, Claude and Gemini, from two short workflow files in your repo. Each posts severity-rated findings with file and line. There is nothing to host: the review runs in GitHub Actions, on your runner and your API keys.
 
-- **Claude** — via [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action), pinned to the v1.0.251 commit. OAuth-authed; posts inline review comments and a top-level summary.
-- **Gemini** — direct call to the Gemini 2.5 API. Posts a single comment with severity-tagged findings rendered from a JSON response.
+It is for teams that already use GitHub Actions and want AI review whose source they can read, with the review rules kept in their own repo.
 
-Every third-party action in the reusable workflows is pinned to a full commit SHA, with its version in a trailing comment. A tag can be moved by whoever controls the upstream repo, and these steps hold the caller's tokens. Dependabot (`.github/dependabot.yml`) opens a weekly pull request when a pinned action has a newer release.
+- **Claude** runs through [`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action) and posts inline comments plus a summary.
+- **Gemini** is called directly (`gemini-4-argon` with thinking `high` by default) and posts one comment listing its findings by severity.
 
-Both reviewers load:
+Use one or both. Each is its own file.
 
-1. **`prompts/base.md`** — universal rules (security, correctness, code quality, performance, maintainability).
-2. **`prompts/<stack>.md`** — stack-specific conventions (e.g. `nestjs-fastify-drizzle.md`).
-3. The consuming repo's **`CLAUDE.md`** for project-specific guidance.
-4. **Optional repo-specific addendum** via `extra_prompt` (inline) or `extra_prompt_path` (file path in the consumer repo) — see below.
+## Quickstart
 
-Originally built for internal CI at Tikiti; published for reuse and as a worked example of the pattern. Not community-supported (no inbound issue triage commitment), but PRs welcome.
+About five minutes for both reviewers.
 
-## Why two reviewers?
+1. Install the [Claude GitHub App](https://github.com/apps/claude) on the repo.
+2. Set the secrets on the repo. `claude setup-token` prints the Claude token; a Gemini key comes from [Google AI Studio](https://aistudio.google.com/apikey). Put each in the variable first: `gh secret set` with an empty `--body` stores an empty secret without an error.
 
-Different models catch different things. Claude is excellent at threading multi-file context and producing a careful narrative review; Gemini is fast and consistent for structured-output / bullet-list-of-issues style. Running both costs roughly one Claude subscription seat + a handful of Gemini API calls per PR, and the disagreement between them is often more informative than either alone — Claude routinely notes which of Gemini's findings it agrees with, and vice versa, when both have already commented on a PR. Drop either by removing its wrapper.
+   ```bash
+   gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo OWNER/REPO --body "$CLAUDE_TOKEN"
+   gh secret set GEMINI_API_KEY --repo OWNER/REPO --body "$GEMINI_KEY"
+   ```
 
-## Usage in a consumer repo
+3. Add `.github/workflows/claude.yml`:
 
-Create two thin wrappers in the consuming repo's `.github/workflows/`.
+   ```yaml
+   name: Claude Code
 
-### `claude.yml`
+   on:
+     pull_request:
+       types: [opened, synchronize, ready_for_review, reopened]
+     issue_comment:
+       types: [created]
+     pull_request_review_comment:
+       types: [created]
 
-```yaml
-name: Claude Code
+   # A called workflow gets at most the caller's permissions, so these are required.
+   permissions:
+     actions: read
+     contents: read
+     pull-requests: write
+     issues: write
+     id-token: write
 
-on:
-  pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
-  issue_comment:
-    types: [created]
-  pull_request_review_comment:
-    types: [created]
+   jobs:
+     review:
+       uses: jadedm/pr-review-workflows/.github/workflows/claude-review.yml@v1
+       with:
+         stack: python
+       secrets:
+         claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+   ```
 
-# Required — reusable workflows can only restrict, not elevate, permissions.
-# Without this block, posting comments and acquiring an OIDC token will fail.
-permissions:
-  actions: read
-  contents: read
-  pull-requests: write
-  issues: write
-  id-token: write
+4. Add `.github/workflows/gemini.yml`:
 
-jobs:
-  review:
-    uses: jadedm/pr-review-workflows/.github/workflows/claude-review.yml@v1
-    with:
-      stack: nestjs-fastify-drizzle
-      runner: '"ubuntu-latest"'
-      slack_notify: true
-      # Optional — repo-specific conventions appended to the public stack prompt
-      extra_prompt_path: .github/review-extras.md
-    secrets:
-      claude_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-      slack_webhook_url:  ${{ secrets.SLACK_WEBHOOK_URL }}
-```
+   ```yaml
+   name: Gemini Code Review
 
-### `gemini.yml`
+   on:
+     pull_request:
+       types: [opened, synchronize, ready_for_review, reopened]
+     issue_comment:
+       types: [created]
+     pull_request_review_comment:
+       types: [created]
 
-```yaml
-name: Gemini Code Review
+   # Without this block the token falls back to the repo default, often read-only.
+   permissions:
+     contents: read
+     pull-requests: write
 
-on:
-  pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
-  issue_comment:
-    types: [created]
+   jobs:
+     review:
+       uses: jadedm/pr-review-workflows/.github/workflows/gemini-review.yml@v1
+       with:
+         stack: python
+       secrets:
+         gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+   ```
 
-permissions:
-  contents: read
-  pull-requests: write
+5. Merge both files to the default branch, then open a pull request. claude-code-action skips a pull request whose `claude.yml` differs from the default branch's copy, so the pull request that adds the file gets a "Claude did not review" notice instead of a review.
 
-jobs:
-  review:
-    uses: jadedm/pr-review-workflows/.github/workflows/gemini-review.yml@v1
-    with:
-      stack: nestjs-fastify-drizzle
-      runner: '"ubuntu-latest"'
-      slack_notify: true
-      extra_prompt_path: .github/review-extras.md
-    secrets:
-      gemini_api_key:    ${{ secrets.GEMINI_API_KEY }}
-      slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-```
+`stack` picks a prompt from [`prompts/`](prompts): `python`, `nestjs-fastify-drizzle`, `nextjs-turborepo-shadcn`, `expo-router-nativewind` or `apps-script`. Comment `@claude` or `@gemini` on a pull request to run that reviewer again.
 
-That's the entire integration. Updates to the prompts in this central repo propagate to every consumer on the next PR.
+## What it does differently
 
-### Do not switch the trigger to `pull_request_target`
+Each point names the file that does it.
 
-On a public repo, pull requests from forks get no secrets under `pull_request`, so both reviewers fail for outside contributors. `pull_request_target` would run with your secrets and a write token while the model reads the fork's content, which lets anyone who opens a pull request steer a job holding your Claude token and Gemini key. Both workflows therefore run only on `pull_request` and comment events: a caller switched to `pull_request_target` gets a skipped review. Do not copy the workflows and loosen that guard.
+- **The review rules come from the base branch.** Your repo's rules file (`extra_prompt_path`) is read from the pull request's base commit (the base branch as the pull request records it) through the GitHub API, never from the pull request, so a pull request cannot rewrite the rules its own review follows. [`scripts/base_file.py`](scripts/base_file.py), called at `claude-review.yml:137` and `gemini-review.yml:257`.
+- **Every third-party action is pinned to a commit.** Whoever controls an upstream repo can move its tags, and these steps hold your tokens. The pins are at `claude-review.yml:63`, `:78` and `:169`; [`.github/dependabot.yml`](.github/dependabot.yml) opens a pull request each week when a pinned action has a newer release.
+- **Model output is made safe before it is posted.** Gemini reads the pull request, so its reply is treated as untrusted: no @-mentions, links, images, HTML or bidirectional control characters reach the comment, and each field is capped. [`scripts/gemini_review_comment.py`](scripts/gemini_review_comment.py), lines 32 to 66.
+- **Large pull requests are split, and the comment says what was not reviewed.** A pull request over the per-call limits is split into up to `max_chunks` parallel calls whose findings merge into one comment. Files that fit no call are listed under "Not reviewed" with the reason. [`scripts/gemini_chunks.py`](scripts/gemini_chunks.py), [`scripts/gemini_review_merge.py`](scripts/gemini_review_merge.py), and the list at `gemini_review_comment.py:91-127`.
+- **When Claude does not review, the pull request says so.** claude-code-action can skip a review and still show a green check. This posts one comment naming the cause and a warning in the run, and the Slack message says "Not reviewed". `claude-review.yml:247`.
+- **The Claude reviewer is denied writes.** File edits, commits, pushes, tags and `gh` are denied, and so are reads of the places on a runner known to hold credentials. These are deny rules for named tools and paths, not a sandbox; see Security below. `claude-review.yml:211-213`.
+- **Strangers cannot spend your quota.** On a public repo only owners, members and collaborators can start a review by comment. `claude-review.yml:42-50`, `gemini-review.yml:83-91`.
+- **Two model families.** Claude and Gemini review independently. They miss different things, and where they disagree is often the most useful part of the review.
 
-A maintainer's `@claude` comment on a fork's pull request also runs with secrets, and Claude reads the fork's files; `@gemini` sends the fork's diff. Read the pull request before asking for a review on it.
+The workflow files are in [`.github/workflows/`](.github/workflows).
 
-### The Claude reviewer and your `.claude/settings.json`
+## Compared with other tools
 
-The Claude reviewer runs with no permission to edit files, commit or push, and with reads denied for the places on a runner known to hold credentials: process environments, `.git` folders, credential files in the home folder, the runner's workflow command and credential files, and the runner's own registration files. These are deny rules, and deny rules win, but they name specific commands and paths rather than fencing Claude into the checkout, so they cover the known places, not every place. Claude also applies your repo's `.claude/settings.json` and `.mcp.json` as they are on the pull request's base branch; a pull request cannot change them. Do not allow broad commands there, such as `Bash(git:*)`, `Bash(curl:*)` or `Bash(gh:*)`: a rule like that hands back a way to write or to send data out that the deny list does not name, for example `git -C . push`. On a self-hosted runner, keep other credentials off the machine, or in places this list names.
+- **[`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action)** is the engine the Claude reviewer runs on. On its own it is a general agent: you write the prompt, the permissions and the guard. This repo adds the review prompts, the base-branch rules file, the write and credential deny list, the skip notice and the second model.
+- **[PR-Agent](https://github.com/The-PR-Agent/pr-agent)** (MIT) does more than review: pull request descriptions, suggested changes, and GitLab, Bitbucket and Azure DevOps as well as GitHub. It runs one model with a fallback. At the commit we read (`9302fa5`), its GitHub docs used `@main` and suggested `pull_request_target` for forks, which gives a fork's pull request your secrets.
+- **[Kodus](https://github.com/kodustech/kodus-ai)** (AGPL-3.0, with paid code under `ee/`) is an app you self-host or use as a service, with an API, workers and two databases. It reviews only the commits since the last review, checks findings again before posting, and supports several git hosts. It posts the model's text unchanged.
 
-### Mentioning the bots
+What this repo does not do yet: review only the commits since the last review, edit one summary comment in place instead of posting a new one each run, check each finding against the code before posting, offer committable suggestions, or retry on another provider when one fails. It supports GitHub only.
 
-Both reviewers re-trigger when their handle is mentioned in a PR comment:
+## Costs
 
-- `@claude` — re-runs Claude. Also triggers on `pull_request_review_comment` events so you can prompt it inline from a review thread.
-- `@gemini` — re-runs Gemini.
+- **Claude** uses the Claude subscription behind the OAuth token; reviews count against that plan's usage limits.
+- **Gemini** bills per token to the key's Google project. Measured on ten of our own merged pull requests in October 2026, `gemini-4-argon` with thinking `high` cost $2.26 in total at Google's listed rates, about $0.23 a review, with a median of 78 seconds a call. `model: gemini-3.8-flash` cost about half as much on the same ten.
+- A pull request split into chunks costs one call per chunk, so up to `max_chunks` times a single review.
+- Runner minutes are your own. Set `runner` to use a self-hosted runner.
 
-The `if:` guard inside each reusable workflow handles the routing — there's no extra wiring on the consumer side.
+## Repo-specific rules
 
-## Layering repo-specific conventions
+The stack prompts describe a stack, not your codebase. For your own conventions (guard names, internal paths, what the reviewer should flag), use:
 
-The stack prompts (`prompts/<stack>.md`) describe the **stack**, not your specific codebase. To layer in repo-specific conventions (custom guard names, internal paths, threshold tunings, project-specific lint rules), use one of:
+- `extra_prompt_path: .github/review-extras.md`, a markdown file in your repo appended under "Repo-specific notes". It is read from the base branch, so a change to it is reviewed like any other change and applies from the next pull request. If the base branch has no such file, the default branch's copy is used; a folder, a link or an unreadable file fails the step.
+- `extra_prompt: <text>` for a short inline note.
 
-- **`extra_prompt: <inline string>`** — for short notes. Multi-line YAML strings get awkward beyond a paragraph.
-- **`extra_prompt_path: <path>`**: points at a markdown file in the consumer repo (e.g. `.github/review-extras.md`), appended under a "Repo-specific notes" heading. It is read from the pull request's base branch through the GitHub API, never from the pull request, so a pull request cannot rewrite the rules its own review follows: a change to the file is reviewed like any other change and applies from the next pull request. If the base branch has no such file, the default branch's copy is used; a folder, a link or an unreadable file fails the step.
-
-If both are set, file contents render first, then the inline string — both under one "Repo-specific notes" section.
-
-Example `.github/review-extras.md` in a consumer repo:
+If both are set, the file comes first. Claude also reads the repo's `CLAUDE.md` on its own; Gemini sees it only when the pull request changes it.
 
 ```markdown
-## Project-specific conventions
+## Project conventions
 
-- Guards: `JwtAuthGuard`, `ProducerVerifiedGuard`, `AdminRoleGuard`
+- Guards: `JwtAuthGuard`, `AdminRoleGuard`
 - Typed exceptions live in `@app/common`; never raw `HttpException`
-- Pagination `_meta` always includes `cursor` (not just `page`)
-- Throttler is global at 100 req/60s; flag endpoints needing a tighter cap
+- Every list endpoint is paginated by cursor
 ```
 
 ## Inputs
 
-### Claude (`claude-review.yml`)
+### Both workflows
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `stack` | string | (required) | Prompt template name in `prompts/<stack>.md` |
-| `runner` | string (JSON) | `"ubuntu-latest"` | `runs-on` value, JSON-encoded |
-| `ref` | string | `''` | Ref of this repo to load prompts, scripts and the Slack action from. Empty means the commit of the workflow being run, so `@v1.2.3` or `@<sha>` also fixes the prompts and scripts (on GitHub Enterprise Server, which lacks that context, empty means `v1`). Set it only to load them from somewhere else; it names a ref in the repository whose workflow is running, so a fork's caller needs a ref that exists in the fork |
-| `slack_notify` | boolean | `false` | Post a Slack message on completion |
-| `extra_prompt` | string | `''` | Inline repo-specific addendum |
-| `extra_prompt_path` | string | `''` | Path (in consumer repo) to a markdown file appended after the stack prompt, read from the pull request's base branch (the default branch if the base lacks it), never from the pull request |
+| `stack` | string | required | Prompt name in `prompts/<stack>.md` |
+| `runner` | string (JSON) | `"ubuntu-latest"` | `runs-on` value, JSON-encoded, for example `'["self-hosted", "linux"]'` |
+| `ref` | string | `''` | Ref of this repo to load prompts, scripts and the Slack action from. Empty means the commit of the workflow that is running, so `@v1.6.14` or `@<sha>` also fixes them. It names a ref in the repo whose workflow is running, so a fork's caller needs a ref that exists in the fork. On GitHub Enterprise Server, which lacks that context, empty means `v1` |
+| `slack_notify` | boolean | `false` | Post a Slack message when a `pull_request` run ends (not on comment runs). Pass `slack_webhook_url` under `secrets:` as well |
+| `extra_prompt` | string | `''` | Inline repo-specific notes |
+| `extra_prompt_path` | string | `''` | Path in your repo to a markdown file of repo-specific notes, read from the base branch |
 
-### Gemini (`gemini-review.yml`)
-
-All Claude inputs above, plus:
+### Gemini only
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `model` | string | `gemini-4-argon` | Gemini model ID. Set `gemini-3.8-flash` for a cheaper review |
-| `thinking_level` | string | `high` | `minimal`, `low`, `medium`, `high`, or `none` (or empty) to send no thinking setting. `gemini-4-argon` does not think unless asked. Ignored for `gemini-1.x` and `gemini-2.x` models, which do not take it |
-| `max_total_lines` | number | `20000` | Source lines per Gemini call |
-| `max_per_file` | number | `3000` | Skip files larger than this |
-| `max_files` | number | `50` | Files per Gemini call |
-| `max_diff_lines` | number | `5000` | Diff lines per Gemini call |
-| `max_payload_bytes` | number | `2000000` | Diff plus source bytes per Gemini call, for files with very long lines |
-| `max_chunks` | number | `3` | A pull request over the per-call caps is split into up to this many parallel calls (1 to 5); findings merge into one comment. Each call is billed, so a large pull request can cost up to this many times a single review. Set `1` for one call |
+| `model` | string | `gemini-4-argon` | Gemini model ID |
+| `thinking_level` | string | `high` | `minimal`, `low`, `medium`, `high`, or `none` (or empty) to send no thinking setting. Ignored for `gemini-1.x` and `gemini-2.x` |
+| `max_total_lines` | number | `20000` | Source lines per call |
+| `max_per_file` | number | `3000` | Skip files with more lines than this |
+| `max_files` | number | `50` | Files per call |
+| `max_diff_lines` | number | `5000` | Diff lines per call |
+| `max_payload_bytes` | number | `2000000` | Diff plus source bytes per call |
+| `max_chunks` | number | `3` | Calls a large pull request is split into (1 to 5). Set `1` for one call |
 
-## Secrets required
+## Secrets
 
-| Workflow | Secret | Source |
+| Workflow | Secret | Where it comes from |
 |---|---|---|
-| Claude | `claude_oauth_token` | Anthropic OAuth (Claude.ai → Account → Code → OAuth Token) |
+| Claude | `claude_oauth_token` | `claude setup-token` |
 | Gemini | `gemini_api_key` | [Google AI Studio](https://aistudio.google.com/apikey) |
-| Either | `slack_webhook_url` (optional) | Slack Incoming Webhook |
+| Either | `slack_webhook_url`, optional | A Slack incoming webhook |
 
-Set on the consumer repo via:
+Claude needs both the GitHub App and the token. The App posts the comments; the review's model call needs the token.
 
-```bash
-gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo <owner>/<repo>
-gh secret set GEMINI_API_KEY          --repo <owner>/<repo>
-gh secret set SLACK_WEBHOOK_URL       --repo <owner>/<repo>
-```
+On a GitHub Free organisation, organisation secrets are not available to private repos: `${{ secrets.X }}` resolves to empty and the API call fails with 401 or 403. Set the secrets on the repo.
 
-> **Use repo-level secrets — not org-level — for private repos.** On the GitHub **Free** org plan, organisation-level Actions secrets are **not available to private repositories**: `${{ secrets.X }}` silently resolves to empty in the workflow (the job runs but the API call 401/403s). Set secrets on the repo (as above) or upgrade to Team/Enterprise.
->
-> **`gh secret set` without `--body` reads from stdin** (an interactive paste prompt). In a non-interactive shell it sets an **empty** value with no error and the timestamp still updates. Pass `--body "<value>"`, pipe the value, or use the repo Settings UI.
+## Security
 
-**Claude auth — install the App *and* set the token.** Install the [Claude GitHub App](https://github.com/apps/claude) on the consumer repo (it handles posting), **and** set `claude_oauth_token` (generate via `claude setup-token`). The App alone is **not sufficient**: it may cover a small one-off `pull_request` review, but the `@claude` comment trigger and larger/subsequent reviews use the **direct Anthropic API**, which requires the token (`Environment variable validation failed: … ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN / WIF is required`). Gemini likewise requires `gemini_api_key`.
+- **Do not switch the trigger to `pull_request_target`.** Pull requests from forks, and from Dependabot, get no secrets under `pull_request`, so both reviewers run and fail on them. `pull_request_target` would run with your secrets and a write token while the model reads the fork's content. Both workflows run only on `pull_request` and comment events, so a caller switched to `pull_request_target` gets a skipped review.
+- A maintainer's `@claude` comment on a fork's pull request runs with secrets, and Claude reads the fork's files; `@gemini` sends the fork's diff. Read the pull request before asking for a review on it.
+- Claude applies your repo's `.claude/settings.json` and `.mcp.json` as they are on the base branch. Do not allow broad commands there, such as `Bash(git:*)`, `Bash(curl:*)` or `Bash(gh:*)`: a rule like that gives back a way to write or send data out that the deny list does not name. The deny list covers the known credential locations on a runner, not every location, so on a self-hosted runner keep other credentials off the machine.
 
-## Adding a new stack
-
-1. Create `prompts/<stack-name>.md` with stack-specific review conventions. Keep it project-agnostic — repo-specific things go in `extra_prompt` / `extra_prompt_path` on each consumer.
-2. Reference it as `stack: <stack-name>` in consuming repo wrappers.
-3. Optionally cut a new tag (`v1.x.0`) so consumers can pin to it.
-
-`base.md` covers universal rules and is always loaded first.
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Versioning
 
-Consumers pin to a tag. Three conventions:
+- `@v1` moves to the latest 1.x release. You get prompt updates and fixes on your next pull request. Breaking changes go to `v2`.
+- `@v1.6.14`, or a commit SHA, fixes the workflow, prompts and scripts to that release.
+- `@main` is for testing this repo only.
 
-- **`@v1` — floating major (recommended for most repos).** The `v1` tag is moved forward to whichever commit is the latest in the 1.x line. Consumers automatically pick up prompt updates, bug fixes, and non-breaking input additions on their next PR. Breaking changes never land here — they go on `v2` instead.
-- **`@v1.2.3` — strict pin.** Locks the consumer to that exact commit, prompts and scripts included (they load from the workflow's own commit unless `ref` says otherwise). Use when a repo needs guaranteed determinism (e.g. compliance audits, frozen review criteria).
-- **`@main` — bleeding edge.** Not recommended outside of dogfooding within this central repo.
-
-When cutting a release: tag the strict version (e.g. `v1.2.3`) AND fast-forward the floating major (`v1`) to the same commit. Breaking prompt changes (different output format, removed inputs, etc.) require a new major — tag `v2.0.0` + create a new `v2` floating tag; leave `v1` untouched.
-
-## Caller permissions
-
-Reusable workflows in GitHub Actions are capped by the caller's `permissions:` block — the called workflow can only equal or restrict the caller's grants, never broaden them. **Each consuming workflow must declare its own `permissions:` block** at the workflow or job level, even though this reusable workflow declares them internally.
-
-For Claude:
-
-```yaml
-permissions:
-  actions: read
-  contents: read
-  pull-requests: write
-  issues: write
-  id-token: write
-```
-
-For Gemini:
-
-```yaml
-permissions:
-  contents: read
-  pull-requests: write
-```
-
-Without these, the effective `GITHUB_TOKEN` in the reusable workflow falls back to the repo's default (typically read-only on private repos), and the actual review-posting / Slack-notify / OIDC steps silently fail.
+Releases are tags; [the tag list](https://github.com/jadedm/pr-review-workflows/tags) is the changelog.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Gemini run shows **0 jobs** / *"This run likely failed because of a workflow file issue"* | Invalid YAML in the called reusable — e.g. a heredoc body dedented below its `run: \|` block ends the block scalar early | Validate with a real YAML parser (`python3 -c "import yaml;yaml.safe_load(open('f'))"`); keep multi-line content in a `prompts/*.md` file and `cat` it, not an inline heredoc |
-| Reviewer job runs but the API returns **401/403 "unregistered callers"** and the step's env shows the key **blank** (not `***`) | `${{ secrets.X }}` resolved to empty — most often an **org-level secret on a GitHub Free-plan org, which is not available to private repositories** | Set the secret at the **repo** level: `gh secret set X --repo <owner>/<repo> --body "…"` (or upgrade the org to Team/Enterprise) |
-| Secret "set" but still empty at runtime; its timestamp updates each attempt | `gh secret set` **without `--body`** reads the value from **stdin** (interactive paste). In a non-interactive shell it stores an **empty** value with no error | Pass `--body "<value>"`, pipe the value, or use the repo Settings UI (interactive in a real terminal is fine) |
-| Claude step fails: **"Claude Code is not installed on this repository"** | The Claude GitHub App isn't installed on the repo | Install <https://github.com/apps/claude> on the repo (you still also need `claude_oauth_token`) |
-| Claude fails: **"Either ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or WIF is required"** | App auth alone is insufficient — the review's model call goes through the direct Anthropic API | Set a real `claude_oauth_token` repo secret (`claude setup-token`); the App is also required but not sufficient on its own |
+| The run shows 0 jobs and "workflow file issue" | The `uses:` path or tag does not exist, or the caller's YAML is invalid | Check the path and tag; parse the file with a YAML parser |
+| Review fails on a fork's or Dependabot's pull request | Those pull requests get no secrets | Expected; review them with `@claude` or `@gemini` after reading them (see Security) |
+| "Claude did not review this pull request" | The pull request changes a file under `.github/workflows/`, or another reason the run's log gives | Merge the workflow change to the default branch; later pull requests are reviewed |
+| The API returns 401 or 403 and the key shows blank in the log | The secret resolved to empty, usually an organisation secret on a Free plan | Set the secret on the repo |
+| "Claude Code is not installed on this repository" | The Claude GitHub App is not installed | Install it; the token is still needed |
+| "Either ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or WIF is required" | The App is installed but the token is missing | Set `CLAUDE_CODE_OAUTH_TOKEN` |
+
+## Adding a stack
+
+Add `prompts/<name>.md` with that stack's conventions, free of any one project's details, and open a pull request; see [CONTRIBUTING.md](CONTRIBUTING.md). [`prompts/base.md`](prompts/base.md) holds the rules every review uses and is always loaded first.
 
 ## Layout
 
 ```
-.
-├── .github/workflows/
-│   ├── claude-review.yml    # reusable workflow (workflow_call)
-│   └── gemini-review.yml    # reusable workflow (workflow_call)
-├── actions/
-│   └── slack-notify/
-│       └── action.yml       # composite action used by both reviewers
-├── prompts/
-│   ├── base.md              # universal review rules (always loaded)
-│   ├── apps-script.md       # Google Apps Script
-│   ├── expo-router-nativewind.md    # Expo SDK 57+ / Expo Router / React Native / NativeWind
-│   ├── nestjs-fastify-drizzle.md
-│   ├── nextjs-turborepo-shadcn.md   # Next.js (App Router) + Turborepo + shadcn/ui + Tailwind v4
-│   └── python.md            # Python: pytest, pandas/numpy, requests, uv/pip
-├── LICENSE
-└── README.md
+.github/workflows/claude-review.yml   reusable Claude workflow
+.github/workflows/gemini-review.yml   reusable Gemini workflow
+.github/workflows/tests.yml           this repo's own tests
+actions/slack-notify/                 Slack message, used by both
+prompts/                              base rules and one file per stack
+scripts/                              Gemini payload, merge and comment; base-branch reader; tests
 ```
 
-## Writeup
+## Background
 
-Background, design choices, and operational notes: [manishj.com/garden/running-ai-code-review-ci-gemini-claude](https://manishj.com/garden/running-ai-code-review-ci-gemini-claude)
+Design choices and operating notes: [running AI code review in CI with Gemini and Claude](https://manishj.com/garden/running-ai-code-review-ci-gemini-claude).
 
 ## License
 
-[MIT](./LICENSE)
-
----
-
-**Built by [Manish Jadhav](https://manishj.com)**, engineer & technical consultant.
-
-Need something like this designed or built? [Inoltro](https://inoltro.ai) is my studio.
+[MIT](LICENSE). Built by [Manish Jadhav](https://manishj.com).
