@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # Create a Google Cloud API key for provider: vertex in gemini-review.yml (#55).
 #
-#   scripts/create_vertex_key.sh --project PROJECT_ID [--out FILE] [--unbound] [--apply]
+#   scripts/create_vertex_key.sh --project PROJECT_ID [--out FILE] [--replace] [--apply]
 #
-# --unbound creates a standard key with no service account, for organisations
-# whose iam.managed.disableServiceAccountApiKeyCreation policy refuses bound
-# keys for Vertex AI. IAM cannot check such a key's caller; its only limit is
-# the API restriction. scripts/allow_vertex_api_keys.sh changes that policy.
+# The key must be bound to a service account: Vertex AI answers 401 "API keys
+# are not supported by this API" to a key with none, on both the project and the
+# express-mode endpoints (tested 20 Oct 2026). Where the organisation policy
+# iam.managed.disableServiceAccountApiKeyCreation refuses bound keys for Vertex
+# AI, scripts/allow_vertex_api_keys.sh adds it to the policy's allowed services.
 #
 # Without --apply it only prints what is there and what it would do. With
 # --apply it enables the Vertex AI and API Keys APIs, creates a service account
 # whose only grant is a custom role holding aiplatform.endpoints.predict (the
 # permission generateContent needs), and creates an API key bound to that
 # account and restricted to the Vertex AI API. The key is written to FILE
-# (default /tmp/.vertex-gemini, or /tmp/.vertex-gemini-unbound with --unbound; created new, mode 600) and never printed.
+# (default /tmp/.vertex-gemini, created new with mode 600) and never printed.
 # Put it in a caller repo's secret with:
 #
 #   test -s /tmp/.vertex-gemini && gh secret set GEMINI_VERTEX_API_KEY --repo OWNER/REPO < /tmp/.vertex-gemini
@@ -24,26 +25,22 @@
 # to pick another profile.
 set -euo pipefail
 
-usage() { echo "usage: $0 --project PROJECT_ID [--out FILE] [--unbound] [--replace] [--apply]" >&2; exit 2; }
-project="" out="" apply=0 unbound=0 replace=0
+usage() { echo "usage: $0 --project PROJECT_ID [--out FILE] [--replace] [--apply]" >&2; exit 2; }
+project="" out="/tmp/.vertex-gemini" apply=0 replace=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) [ $# -ge 2 ] || usage; project=$2; shift 2 ;;
     --out) [ $# -ge 2 ] || usage; out=$2; shift 2 ;;
     --apply) apply=1; shift ;;
-    --unbound) unbound=1; shift ;;
     --replace) replace=1; shift ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
 done
 [ -n "$project" ] || usage
-# Separate default files, so an unbound key and a bound one never overwrite each other.
-[ -n "$out" ] || { out="/tmp/.vertex-gemini"; [ "$unbound" -eq 1 ] && out="/tmp/.vertex-gemini-unbound"; }
 
 sa_name="pr-review-vertex"
 sa="${sa_name}@${project}.iam.gserviceaccount.com"
 key_name="pr-review-vertex"
-[ "$unbound" -eq 1 ] && key_name="pr-review-vertex-unbound"
 role_id="prReviewVertexPredict"
 role="projects/${project}/roles/${role_id}"
 
@@ -82,13 +79,6 @@ state() {
 echo "Before:"
 state
 
-if [ "$apply" -ne 1 ] && [ "$unbound" -eq 1 ]; then
-  echo
-  echo "Would: enable aiplatform.googleapis.com and apikeys.googleapis.com; create an API key '${key_name}'"
-  echo "with no service account, restricted to aiplatform.googleapis.com; write it to ${out}."
-  echo "Rerun with --apply to do it."
-  exit 0
-fi
 if [ "$apply" -ne 1 ]; then
   echo
   echo "Would: enable aiplatform.googleapis.com and apikeys.googleapis.com; create role ${role_id}"
@@ -125,16 +115,12 @@ if [ -n "$existing" ]; then
   echo "  gcloud services api-keys delete UID --project ${project} --quiet > /dev/null 2>&1, or rerun with --replace" >&2
   exit 1
 fi
-bind=(--service-account "$sa")
-[ "$unbound" -eq 1 ] && bind=()
-if [ "$unbound" -eq 0 ]; then
 gcloud iam roles describe "$role_id" --project "$project" > /dev/null 2>&1 \
   || gcloud iam roles create "$role_id" --project "$project" --title "PR review: Vertex AI generateContent" \
        --permissions aiplatform.endpoints.predict --stage GA > /dev/null
 [ -n "$(gcloud iam service-accounts list --project "$project" --filter="email=${sa}" --format='value(email)')" ] \
   || gcloud iam service-accounts create "$sa_name" --project "$project" --display-name "PR review, Vertex AI calls only"
 gcloud projects add-iam-policy-binding "$project" --member "serviceAccount:${sa}" --role "$role" --condition=None > /dev/null
-fi
 # A fixed id, so the next command finds this key without parsing create's output.
 uid="${key_name}-$(date -u +%Y%m%d%H%M%S)"
 # --async returns the operation, not the finished key, so the key string is
@@ -142,7 +128,7 @@ uid="${key_name}-$(date -u +%Y%m%d%H%M%S)"
 # With --async gcloud names the operation in a message ("operations wait operations/..."),
 # not the key, so the operation id is read from that text.
 op=$(gcloud services api-keys create --project "$project" --key-id "$uid" --display-name "$key_name" \
-  --api-target=service=aiplatform.googleapis.com ${bind[@]+"${bind[@]}"} --async 2>&1 | grep -o 'operations/[A-Za-z0-9._-]*' | head -1) || true
+  --api-target=service=aiplatform.googleapis.com --service-account "$sa" --async 2>&1 | grep -o 'operations/[A-Za-z0-9._-]*' | head -1) || true
 [ -n "$op" ] || { echo "creating key ${uid} returned no operation" >&2; exit 1; }
 # The operation's own record carries the key string once it finishes, so it is
 # never read. The key's metadata (api-keys describe) holds no key string; its
