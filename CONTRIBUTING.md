@@ -15,7 +15,7 @@ Issues and pull requests are welcome. For a question or an idea that is not yet 
 The tests use the Python standard library only. Run them all from the repo root:
 
 ```bash
-rc=0; for t in scripts/test_*.py; do python3 "$t" || { echo "FAILED: $t"; rc=1; }; done; exit $rc
+(rc=0; for t in scripts/test_*.py; do python3 "$t" || { echo "FAILED: $t"; rc=1; }; done; exit $rc)
 ```
 
 `scripts/test_gemini_review_parse.py` and the others each print one line per case and a pass and fail count. CI runs the same files (`.github/workflows/tests.yml`). A change to a workflow step that a test reads, such as the skip notice in `claude-review.yml`, should come with a case that fails without the change.

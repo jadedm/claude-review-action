@@ -14,7 +14,7 @@ Use one or both. Each is its own file.
 About five minutes for both reviewers.
 
 1. Install the [Claude GitHub App](https://github.com/apps/claude) on the repo.
-2. Set the secrets on the repo. `claude setup-token` prints the Claude token; a Gemini key comes from [Google AI Studio](https://aistudio.google.com/apikey). Put each in the variable first: `gh secret set` with an empty `--body` stores an empty secret without an error.
+2. Set the secrets on the repo. `claude setup-token` prints the Claude token; a Gemini key comes from [Google AI Studio](https://aistudio.google.com/apikey). Put each value in a shell variable first: `gh secret set` with an empty `--body` stores an empty secret without an error.
 
    ```bash
    gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo OWNER/REPO --body "$CLAUDE_TOKEN"
@@ -149,7 +149,7 @@ If both are set, the file comes first. Claude also reads the repo's `CLAUDE.md` 
 | `model` | string | `gemini-4-argon` | Gemini model ID |
 | `thinking_level` | string | `high` | `minimal`, `low`, `medium`, `high`, or `none` (or empty) to send no thinking setting. Ignored for `gemini-1.x` and `gemini-2.x` |
 | `max_total_lines` | number | `20000` | Source lines per call |
-| `max_per_file` | number | `3000` | Skip files with more lines than this |
+| `max_per_file` | number | `3000` | For a file with more lines than this, send only its diff, not its full source |
 | `max_files` | number | `50` | Files per call |
 | `max_diff_lines` | number | `5000` | Diff lines per call |
 | `max_payload_bytes` | number | `2000000` | Diff plus source bytes per call |
