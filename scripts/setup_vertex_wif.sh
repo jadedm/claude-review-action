@@ -19,7 +19,9 @@
 # So another workflow in a listed repository cannot get a token.
 #
 # Without --apply it prints what is there and what it would set. Reruns change
-# nothing that is already as wanted. Uses the active gcloud account (set
+# nothing that is already as wanted. The condition is rewritten from the
+# --repos given, so a rerun must list every repository that should keep access;
+# a dropped repository's binding stays but the condition no longer admits it. Uses the active gcloud account (set
 # CLOUDSDK_CONFIG for another profile) and gh to look up repository ids.
 set -euo pipefail
 

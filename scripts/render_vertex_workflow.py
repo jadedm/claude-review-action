@@ -74,6 +74,17 @@ CHANGES = [
     ("""      gemini_api_key:
         required: true
 """, "", 1),
+    # No ref input: the scripts and the Slack action always come from this
+    # workflow's own commit. Every step of a job with id-token: write can ask
+    # for an OIDC token, and the provider trusts the workflow's tag, so a ref
+    # pointing at any other commit would let that commit's code get the same
+    # Google token.
+    ("""      ref:
+        description: 'Ref of this repo to load prompts, scripts and the Slack action from (tag / branch / sha). Empty means the commit of this workflow that is running, so a caller pinned by tag or SHA gets prompts and scripts from the same commit (#25)'
+        type: string
+        default: ''
+""", "", 1),
+    ("          ref: ${{ inputs.ref || job.workflow_sha || 'v1' }}\n", "          ref: ${{ job.workflow_sha || 'v1' }}\n", 1),
     ("""permissions:
   contents: read
   pull-requests: write

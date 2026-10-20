@@ -93,8 +93,8 @@ vertex_in, vertex_sec = workflow_call("gemini-review-vertex.yml")
 vertex_only = readme_table("`gemini-review-vertex.yml` only")
 check("B12 the Vertex table lists exactly the inputs gemini-review-vertex.yml adds", set(vertex_only) == set(vertex_in) - set(gemini_in),
       (sorted(vertex_only), sorted(set(vertex_in) - set(gemini_in))))
-check("B12 the Vertex workflow takes the Gemini inputs except provider, as the README says",
-      set(vertex_in) - set(vertex_only) == set(gemini_in) - {"provider"}, sorted(set(vertex_in) ^ set(gemini_in)))
+check("B12 the Vertex workflow takes the Gemini inputs except provider and ref, as the README says",
+      set(vertex_in) - set(vertex_only) == set(gemini_in) - {"provider", "ref"}, sorted(set(vertex_in) ^ set(gemini_in)))
 check("B12 its only secret is the Slack webhook, and vertex_project is required there",
       vertex_sec == ["slack_webhook_url"] and vertex_in.get("vertex_project") == "required", (vertex_sec, vertex_in.get("vertex_project")))
 named = set(re.findall(r"\| `([a-z_]+)`(?:, optional)? \|", README.split("## Secrets", 1)[1].split("\n## ", 1)[0]))

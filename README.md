@@ -127,16 +127,19 @@ AI Studio stops calls when a billing account reaches its [tier's monthly spend c
    scripts/setup_vertex_wif.sh --project YOUR_PROJECT_ID --repos OWNER/REPO --apply
    ```
 
-2. Replace `gemini.yml`'s job. The caller must grant `id-token: write` itself, because a called workflow cannot raise its caller's permissions:
+2. Replace `gemini.yml`'s job. The caller must grant `id-token: write` itself, because a called workflow cannot raise its caller's permissions; granting it on the job keeps it from other jobs in the file:
 
    ```yaml
    permissions:
      contents: read
      pull-requests: write
-     id-token: write
 
    jobs:
      review:
+       permissions:
+         contents: read
+         pull-requests: write
+         id-token: write
        uses: jadedm/pr-review-workflows/.github/workflows/gemini-review-vertex.yml@v1
        with:
          stack: python
@@ -145,7 +148,7 @@ AI Studio stops calls when a billing account reaches its [tier's monthly spend c
          service_account: pr-review-vertex@YOUR_PROJECT_ID.iam.gserviceaccount.com
    ```
 
-Pull requests from forks get no OIDC token, so the review fails on them, as it does without secrets.
+A `pull_request` run from a fork gets no OIDC token, so the review fails on it, as it does without secrets. An `@gemini` comment on a fork's pull request runs in your repository and does get one; nothing in the job runs the fork's files, but read the pull request before asking. The workflow has no `ref` input: its scripts always come from its own commit, because any step in a job holding `id-token: write` can ask for a token.
 
 ### With a key
 
@@ -215,7 +218,7 @@ If both are set, the file comes first. Claude also reads the repo's `CLAUDE.md` 
 
 ### `gemini-review-vertex.yml` only
 
-It takes the Gemini inputs above except `provider`, needs no `gemini_api_key`, and adds:
+It takes the Gemini inputs above except `provider` and `ref`, needs no `gemini_api_key`, and adds:
 
 | Input | Type | Default | Description |
 |---|---|---|---|

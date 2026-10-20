@@ -13,10 +13,6 @@ on:
         description: 'JSON-encoded runs-on value (e.g. "ubuntu-latest" or "[\"self-hosted\",\"aws\",\"spot\"]")'
         type: string
         default: '"ubuntu-latest"'
-      ref:
-        description: 'Ref of this repo to load prompts, scripts and the Slack action from (tag / branch / sha). Empty means the commit of this workflow that is running, so a caller pinned by tag or SHA gets prompts and scripts from the same commit (#25)'
-        type: string
-        default: ''
       model:
         description: 'Gemini model name'
         type: string
@@ -184,7 +180,7 @@ jobs:
           # is empty on GitHub Enterprise Server; v1 here is the old default, not
           # this repo's default branch.
           repository: ${{ job.workflow_repository || 'jadedm/pr-review-workflows' }}
-          ref: ${{ inputs.ref || job.workflow_sha || 'v1' }}
+          ref: ${{ job.workflow_sha || 'v1' }}
           path: .claude-review-action
           token: ${{ github.token }}
           # Nothing later needs git credentials in this checkout either (#25 review).
@@ -283,7 +279,7 @@ jobs:
           # IMPORTANT: pass user-controlled inputs via env, NEVER interpolate
           # ${{ inputs.* }} directly into bash. Direct interpolation lets
           # backticks / $(...) inside a consumer's extra_prompt run as shell
-          # commands in the runner where gemini_api_key is exported.
+          # commands in the runner where the Gemini credential is exported.
           STACK: ${{ inputs.stack }}
           EXTRA_PROMPT: ${{ inputs.extra_prompt }}
           EXTRA_PROMPT_PATH: ${{ inputs.extra_prompt_path }}
@@ -382,7 +378,7 @@ jobs:
         run: |
           set -euo pipefail
           PROMPT=$(cat /tmp/review-prompt.txt)
-          # Both hosts take the key in X-goog-api-key. Vertex wants the turn's
+          # AUTH_SCHEME below picks the credential header. Vertex wants the turn's
           # role and the level in capitals (#55); AI Studio's request is unchanged.
           SERVICE="Gemini API" ROLE="" LEVEL="$THINKING_LEVEL"
           if [ "$PROVIDER" = "vertex" ]; then

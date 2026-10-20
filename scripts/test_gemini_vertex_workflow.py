@@ -53,7 +53,13 @@ print("render")
 check("B1 the committed file is the render of gemini-review.yml", rv.render(MAIN) == VERTEX)
 r = subprocess.run([sys.executable, str(HERE / "render_vertex_workflow.py"), "--check"], capture_output=True, text=True)
 check("B1 --check exits 0 on the committed file", r.returncode == 0, r.stdout)
-check("B1 a hand edit to the generated file no longer matches", rv.render(MAIN) != VERTEX.replace("token_format", "token_format "))
+target = REPO / ".github/workflows/gemini-review-vertex.yml"
+try:
+    target.write_text(VERTEX.replace("token_format: access_token", "token_format: id_token"))
+    r = subprocess.run([sys.executable, str(HERE / "render_vertex_workflow.py"), "--check"], capture_output=True, text=True)
+    check("B1 --check exits 1 after a hand edit to the generated file", r.returncode == 1 and "differs" in r.stdout, r.stdout)
+finally:
+    target.write_text(VERTEX)
 for old, new, times in rv.CHANGES:
     first = old.splitlines()[0][:50]
     for label, text in (("missing", MAIN.replace(old, "")), ("doubled", MAIN.replace(old, old + old))):
@@ -93,6 +99,11 @@ check("B6 no provider input", "      provider:\n" not in inputs)
 check("B6 no gemini_api_key secret, only the optional Slack one", "gemini_api_key" not in secrets and "slack_webhook_url" in secrets, secrets)
 perms = block(VERTEX, "\npermissions:\n", "\njobs:")
 check("B6 the workflow asks for id-token: write", "  id-token: write" in perms, perms)
+code = [l for l in LINES if not l.strip().startswith("#")]
+check("B20 no ref input, and the action checkout uses only the workflow's own commit",
+      "      ref:" not in inputs and "inputs.ref" not in VERTEX and "          ref: ${{ job.workflow_sha || 'v1' }}" in LINES)
+check("B21 no inputs.provider and no gemini_api_key outside comments",
+      not [l for l in code if "inputs.provider" in l or "gemini_api_key" in l], [l for l in code if "inputs.provider" in l or "gemini_api_key" in l])
 check("B19 its concurrency group differs from gemini-review.yml's, so neither cancels the other",
       "      group: gemini-review-vertex-${{" in VERTEX and "      group: gemini-review-${{" in MAIN and "      group: gemini-review-${{" not in VERTEX)
 
@@ -111,6 +122,9 @@ check("B15 sign-in comes after both checkouts and directly before the call", aut
 check("B15 the call step's credential is the sign-in step's token, sent as a bearer",
       "          GEMINI_API_KEY: ${{ steps.auth.outputs.access_token }}" in call and "          AUTH_SCHEME: bearer" in call
       and "          PROVIDER: vertex" in call)
+check("B15 the access token is read only by the call step",
+      [i for i, l in enumerate(LINES) if "steps.auth.outputs.access_token" in l] == [i for i, l in enumerate(LINES)
+       if "steps.auth.outputs.access_token" in l and call_at <= i < call_at + len(call)] != [])
 check("B15 no secret is read in the Vertex workflow except the Slack webhook",
       [l.strip() for l in LINES if "secrets." in l] == ["webhook_url: ${{ secrets.slack_webhook_url }}"],
       [l.strip() for l in LINES if "secrets." in l])
