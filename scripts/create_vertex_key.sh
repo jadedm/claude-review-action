@@ -133,23 +133,22 @@ uid="${key_name}-$(date -u +%Y%m%d%H%M%S)"
 op=$(gcloud services api-keys create --project "$project" --key-id "$uid" --display-name "$key_name" \
   --api-target=service=aiplatform.googleapis.com ${bind[@]+"${bind[@]}"} --async 2>&1 | grep -o 'operations/[A-Za-z0-9._-]*' | head -1) || true
 [ -n "$op" ] || { echo "creating key ${uid} returned no operation" >&2; exit 1; }
-# A finished operation carries the key string, and gcloud prints it as a
-# message on stderr, so stderr is never kept here: only the done flag on
-# stdout is read. A failed operation makes describe exit non-zero.
-status="" failed=0
+# The operation's own record carries the key string once it finishes, so it is
+# never read. The key's metadata (api-keys describe) holds no key string; its
+# appearing means the key exists. A key the org policy refuses never appears.
+found=""
 for attempt in $(seq 1 20); do
-  if ! status=$(gcloud services operations describe "$op" --format='value(done)' 2> /dev/null); then failed=1; break; fi
-  [ "$status" = "True" ] && break
+  found=$(gcloud services api-keys describe "$uid" --project "$project" --format='value(uid)' 2> /dev/null) || true
+  [ -n "$found" ] && break
   sleep 3
 done
-case "$status:$failed" in
-  True:0) ;;
-  *) echo "creating key ${uid} did not finish (done=${status:-unknown}). Its error is not printed here because a" >&2
-     echo "finished operation's message holds the key; run: gcloud services operations describe ${op} --format='value(error.message)' 2>/dev/null" >&2
-     echo "An organisation policy (iam.managed.disableServiceAccountApiKeyCreation) that does not list" >&2
-     echo "aiplatform.googleapis.com in allowedServices refuses this key." >&2
-     exit 1 ;;
-esac
+if [ -z "$found" ]; then
+  echo "key ${uid} did not appear within a minute. Its error is not printed here, because a finished" >&2
+  echo "operation's record holds the key; to read it: gcloud services operations describe ${op} --format='value(error.message)' 2>/dev/null" >&2
+  echo "An organisation policy (iam.managed.disableServiceAccountApiKeyCreation) that does not list" >&2
+  echo "aiplatform.googleapis.com in allowedServices refuses a bound key." >&2
+  exit 1
+fi
 # Still the plain, empty, private file claimed above, not a link or a pipe.
 if ! [ -f "$out" ] || [ -L "$out" ] || [ -s "$out" ]; then
   echo "${out} changed while the key was being created; not writing to it" >&2; exit 1
