@@ -97,11 +97,17 @@ for path in files:
     check(f"75.2 {path.name}: the message holds no raw pull request title",
           message and "github.event.pull_request.title" not in message, message)
     check(f"75.3 {path.name}: the message holds {{title}} once", message.count("{title}") == 1, message)
-    # GitHub fills in the message's own ${{ }} values before the action runs.
-    filled = re.sub(r"\$\{\{.*?\}\}", "V", message)
-    text = sent(filled, TITLE)
+    # GitHub fills in the ${{ }} values before the action runs: the title
+    # expression with the real title, the others with a stand-in.
+    def fill(s):
+        s = s.replace("${{ github.event.pull_request.title }}", TITLE)
+        return re.sub(r"\$\{\{.*?\}\}", "V", s)
+    filled = fill(message)
+    title_line = next((l.strip() for l in slack if l.strip().startswith("title:")), "title: ")
+    text = sent(filled, fill(title_line.split(":", 1)[1].strip()))
     check(f"75.4 {path.name}: through the action, the title arrives escaped and the rest of the message unchanged",
-          text is not None and text == filled.replace("{title}", SAFE) and TITLE not in text, (text, filled))
+          text is not None and TITLE not in text and SAFE in text
+          and text == filled.replace("{title}", SAFE), (text, filled))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Cases for who can start a Claude review by comment (#64).
+"""Cases for who can start a review by comment (#64).
 
-Run: python3 scripts/test_claude_trigger.py
+Run: python3 scripts/test_comment_trigger.py
 
-Reads the job's real `if:` from claude-review.yml and evaluates it against
+Reads the review job's real `if:` from claude-review.yml, gemini-review.yml
+and gemini-review-vertex.yml and evaluates it against
 event payloads with a small evaluator of GitHub's expression syntax: literals,
 property access, !, ==, !=, &&, || and the contains and fromJSON functions.
 Missing properties are null, && and || return an operand as GitHub does, and
@@ -15,10 +16,14 @@ import re
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
-WORKFLOW = REPO / ".github/workflows/claude-review.yml"
-TEXT = WORKFLOW.read_text()
-JOB_IF = TEXT.split("\n    if: >\n", 1)[1].split("\n    runs-on:", 1)[0]
-JOB_IF = " ".join(l.strip() for l in JOB_IF.splitlines())
+WF = REPO / ".github/workflows"
+# Each workflow and the mention that starts it.
+WORKFLOWS = (("claude-review.yml", "@claude"), ("gemini-review.yml", "@gemini"), ("gemini-review-vertex.yml", "@gemini"))
+
+
+def job_if(text):
+    block = text.split("\n    if: >\n", 1)[1].split("\n    runs-on:", 1)[0]
+    return " ".join(l.strip() for l in block.splitlines())
 
 passed = failed = 0
 
@@ -164,8 +169,11 @@ def event(name="issue_comment", action="created", private=False, role="MEMBER", 
     return {"github": {"event_name": name, "event": payload}, "inputs": {"require_role_on_private": require}}
 
 
-def runs(**kw):
-    return truthy(evaluate(JOB_IF, event(**kw)))
+def runner(expr, mention):
+    def runs(**kw):
+        kw.setdefault("body", f"{mention} please review")
+        return truthy(evaluate(expr, event(**kw)))
+    return runs
 
 
 print("the evaluator itself")
@@ -178,32 +186,41 @@ check("16 contains reads strings and arrays, fromJSON parses an array",
       and evaluate("contains(fromJSON('[\"OWNER\"]'), x.y)", {}) is False)
 check("16 && binds tighter than ||", evaluate("true || false && false", {}) is True and evaluate("(true || false) && false", {}) is False)
 
-print("who can start a review (#64)")
-check("64.1 a pull_request event runs, public or private, input on or off",
-      all(runs(name="pull_request", action=a, private=p, require=r)
-          for a in ("opened", "synchronize") for p in (False, True) for r in (False, True)))
-check("64.2 public repo, new @claude comment by a MEMBER: runs", runs())
-check("64.3 public repo, association NONE: refused", not runs(role="NONE"))
-check("64.4 public repo, association CONTRIBUTOR: refused", not runs(role="CONTRIBUTOR"))
-check("64.5 private repo, input left at its default, association NONE: runs as before", runs(private=True, role="NONE"))
-check("64.6 private repo, input on, association NONE: refused", not runs(private=True, role="NONE", require=True))
-check("64.7 private repo, input on, association CONTRIBUTOR: refused", not runs(private=True, role="CONTRIBUTOR", require=True))
-check("64.8 private repo, input on, COLLABORATOR issue comment: runs", runs(private=True, role="COLLABORATOR", require=True))
-check("64.9 private repo, input on, OWNER review-thread comment: runs",
-      runs(name="pull_request_review_comment", private=True, role="OWNER", require=True))
-check("64.10 edited @claude comment by a MEMBER on a public repo: refused", not runs(action="edited"))
-check("64.11 deleted @claude comment, private repo, default input: refused", not runs(action="deleted", private=True, role="NONE"))
-check("64.12 edited review-thread comment, private repo: refused",
-      not runs(name="pull_request_review_comment", action="edited", private=True, role="OWNER"))
-check("64.13 @claude on an issue that is not a pull request: refused", not runs(on_pr=False, role="OWNER"))
-check("64.14 new comment by a MEMBER without @claude: refused", not runs(body="looks good"))
+for wf, mention in WORKFLOWS:
+    TEXT = (WF / wf).read_text()
+    runs = runner(job_if(TEXT), mention)
+    print(f"who can start a review from {wf} (#64)")
+    check(f"{wf}: 64.1 a pull_request event runs, public or private, input on or off",
+          all(runs(name="pull_request", action=a, private=p, require=r)
+              for a in ("opened", "synchronize") for p in (False, True) for r in (False, True)))
+    check(f"{wf}: 64.2 public repo, new @claude comment by a MEMBER: runs", runs())
+    check(f"{wf}: 64.3 public repo, association NONE: refused", not runs(role="NONE"))
+    check(f"{wf}: 64.4 public repo, association CONTRIBUTOR: refused", not runs(role="CONTRIBUTOR"))
+    check(f"{wf}: 64.5 private repo, input left at its default, association NONE: runs as before", runs(private=True, role="NONE"))
+    check(f"{wf}: 64.6 private repo, input on, association NONE: refused", not runs(private=True, role="NONE", require=True))
+    check(f"{wf}: 64.7 private repo, input on, association CONTRIBUTOR: refused", not runs(private=True, role="CONTRIBUTOR", require=True))
+    check(f"{wf}: 64.8 private repo, input on, COLLABORATOR issue comment: runs", runs(private=True, role="COLLABORATOR", require=True))
+    check(f"{wf}: 64.9 private repo, input on, OWNER review-thread comment: runs",
+          runs(name="pull_request_review_comment", private=True, role="OWNER", require=True))
+    check(f"{wf}: 64.10 edited {mention} comment by a MEMBER on a public repo: refused", not runs(action="edited"))
+    check(f"{wf}: 64.11 deleted {mention} comment, private repo, default input: refused", not runs(action="deleted", private=True, role="NONE"))
+    check(f"{wf}: 64.12 edited review-thread comment, private repo: refused",
+          not runs(name="pull_request_review_comment", action="edited", private=True, role="OWNER"))
+    check(f"{wf}: 64.13 {mention} on an issue that is not a pull request: refused", not runs(on_pr=False, role="OWNER"))
+    check(f"{wf}: 64.14 new comment by a MEMBER without {mention}: refused", not runs(body="looks good"))
 
-spec = TEXT.split("      require_role_on_private:\n", 1)[-1].split("\n    secrets:", 1)[0]
+    spec = TEXT.split("      require_role_on_private:\n", 1)[-1].split("\n    secrets:", 1)[0]
+    check(f"64.15 {wf}: the input is a boolean that defaults to false",
+          "      require_role_on_private:\n" in TEXT and "        type: boolean" in spec and "        default: false" in spec, spec[:300])
+
+    other = "@gemini" if mention == "@claude" else "@claude"
+    check(f"{wf}: 64.17 a new {other} comment by a MEMBER does not start this workflow", not runs(body=f"{other} please review"))
+
 readme = (REPO / "README.md").read_text()
 row = next((l for l in readme.splitlines() if l.startswith("| `require_role_on_private` |")), "")
-check("64.15 the input is a boolean that defaults to false, and the README lists it so",
-      "        type: boolean" in spec and "        default: false" in spec
-      and "| boolean | `false` |" in row, (spec[:300], row))
+both = readme.split("### Both workflows\n", 1)[-1].split("\n### ", 1)[0]
+check("64.16 the README lists the input once, under Both workflows, as a boolean defaulting to false",
+      "| boolean | `false` |" in row and row in both and readme.count("| `require_role_on_private` |") == 1, row)
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
