@@ -108,11 +108,11 @@ check("58 the step reads the stack input", "          STACK: ${{ inputs.stack }}
 for name in ("python", "nestjs-fastify-drizzle", "nope"):
     p, url = run(stack=name)
     check(f"58.1/2/9 stack {name!r} passes the check", p.returncode == 0 and url, (p.returncode, p.stdout[-200:]))
-for name in ("../../README", "python/../base", "", "Python", "_gemini-tail", "python\nx", "py thon", "python.md"):
+for name in ("../../README", "python/../base", "", "Python", "_gemini-tail", "_claude-tail", "python\nx", "py thon", "python.md"):
     p, url = run(stack=name)
     check(f"58.3-8 stack {name!r}: fails, says why, writes no URL",
           p.returncode != 0 and "stack must be a prompt name" in p.stdout and url is None, (p.returncode, p.stdout[-200:], url))
-prompts = sorted(f.stem for f in (HERE.parent / "prompts").glob("*.md") if f.stem != "_gemini-tail")
+prompts = sorted(f.stem for f in (HERE.parent / "prompts").glob("*.md") if not f.stem.startswith("_"))
 p_ok = [n for n in prompts if run(stack=n)[0].returncode == 0]
 check("58.11 every shipped prompt name passes", prompts and p_ok == prompts, (prompts, p_ok))
 
