@@ -12,16 +12,20 @@
 #
 # The provider admits a GitHub token only when all three hold:
 #   - the job runs gemini-review-vertex.yml from jadedm/pr-review-workflows
-#     called as @v1, as @ one of the --release-sha commits, or at one of the
+#     called as @v1, as @ one of the --release-sha values, or at one of the
 #     --allow-ref refs, given in full such as refs/heads/my-branch, for testing
 #     (remove those afterwards; a branch also needs its head commit passed as
 #     --release-sha, since the next rule applies to it too). Older tags are not admitted, so a caller
 #     cannot pin back to a release that a later one fixed;
-#   - the workflow file came from one of the --release-sha commits (the
-#     token's job_workflow_sha). A tag is a name that can be moved; this ties
-#     the token to commits that were reviewed (#66). When v1 moves, rerun with
-#     the old and the new commit, move the tag, then rerun with the new one
-#     only (CONTRIBUTING.md, Releases);
+#   - the token's job_workflow_sha is one of the --release-sha values. A tag
+#     is a name that can be moved; this ties the token to what was reviewed
+#     (#66). GitHub reports the SHA the caller's ref names: for @v1, which is
+#     an annotated tag, that is the tag object (git rev-parse v1), not the
+#     commit; for a caller pinned by commit, the commit (git rev-parse
+#     'v1^{commit}'). Moving v1 makes a new tag object, so list both for the
+#     release in use. When v1 moves, rerun with the old and the new SHAs,
+#     move the tag, then rerun with the new ones only (CONTRIBUTING.md,
+#     Releases);
 #   - the calling repository's numeric id is one of the listed repositories'
 #     (ids, not names, because a deleted repository's name can be taken again).
 # So another workflow in a listed repository cannot get a token.
@@ -47,7 +51,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$project" ] && [ -n "$repos" ] && [ ${#shas[@]} -gt 0 ] || usage
 for sha in "${shas[@]}"; do
-  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "--release-sha must be a full 40-character lower-case commit SHA, got '${sha}'" >&2; exit 2; }
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "--release-sha must be a full 40-character lower-case SHA, got '${sha}'" >&2; exit 2; }
 done
 for ref in ${refs[@]+"${refs[@]}"}; do
   [[ "$ref" =~ ^refs/(heads|tags)/[A-Za-z0-9._/-]+$ ]] || { echo "--allow-ref must be a full ref such as refs/heads/main, got '${ref}'" >&2; exit 2; }

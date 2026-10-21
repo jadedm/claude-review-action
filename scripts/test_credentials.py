@@ -65,14 +65,14 @@ found = [s for s in ["Claude App token", "App token is"] if s in CLAUDE]
 check("D3 the workflow comments no longer describe the App token", not found, found)
 check("D3 the README says who posts Claude's comments", "github-actions[bot]" in README)
 
-check("D1 the README's Vertex setup passes --release-sha", "--release-sha FULL_SHA --apply" in README)
+check("D1 the README's Vertex setup passes --release-sha", "--release-sha TAG_OBJECT_SHA --release-sha COMMIT_SHA --apply" in README)
 versioning = README.split("## Versioning", 1)[1].split("\n## ", 1)[0]
 check("D1 Versioning says Vertex signs in at @v1 and at a listed release commit, not at a version tag",
       "gemini-review-vertex.yml" in versioning and "commit SHA" in versioning and "pin it by SHA" in versioning, versioning)
 
 releases = CONTRIBUTING.split("## Releases", 1)[1].split("\n## ", 1)[0]
-order = [releases.find(s) for s in ("current and the new commit", "Move `v1`", "new commit only")]
-check("R1 CONTRIBUTING gives the release order: both commits, move v1, new commit only",
+order = [releases.find(s) for s in ("git rev-parse v1", "current tag object and commit and the new ones", "Push the tag", "new tag object and commit only")]
+check("R1 CONTRIBUTING gives the release order: create v1 locally, list old and new, push, drop the old",
       -1 not in order and order == sorted(order), (order, releases))
 
 print(f"\n{passed} passed, {failed} failed")

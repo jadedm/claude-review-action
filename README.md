@@ -117,10 +117,10 @@ AI Studio stops calls when a billing account reaches its [tier's monthly spend c
 
 `gemini-review-vertex.yml` signs in with the job's GitHub OIDC token, exchanged for a short-lived token of a service account whose only permission is `aiplatform.endpoints.predict`. It is generated from `gemini-review.yml` by [`scripts/render_vertex_workflow.py`](scripts/render_vertex_workflow.py), so the review steps are the same.
 
-1. Set up Google Cloud. [`scripts/setup_vertex_wif.sh`](scripts/setup_vertex_wif.sh) prints what it would create; `--apply` creates it and prints the two values the caller needs. It admits a token only from `gemini-review-vertex.yml` called as `@v1` or as `@` a listed release commit, whose file came from a listed release commit, in one of the listed repositories. A tag can be moved; the commit check means a moved `v1` signs in only once you list its new commit. `--release-sha` is the full commit SHA that `v1` points at (`git rev-parse v1^{commit}` in a clone of this repo):
+1. Set up Google Cloud. [`scripts/setup_vertex_wif.sh`](scripts/setup_vertex_wif.sh) prints what it would create; `--apply` creates it and prints the two values the caller needs. It admits a token only from `gemini-review-vertex.yml` called as `@v1` or as `@` a listed release commit, whose workflow SHA is a listed one, in one of the listed repositories. A tag can be moved; the SHA check means a moved `v1` signs in only once you list it again. GitHub reports a different SHA for each kind of caller: for `@v1`, an annotated tag, the tag object's; for a caller pinned by commit, the commit's. List both. `git ls-remote https://github.com/jadedm/pr-review-workflows refs/tags/v1 'refs/tags/v1^{}'` prints them, tag object first, commit second:
 
    ```bash
-   scripts/setup_vertex_wif.sh --project YOUR_PROJECT_ID --repos OWNER/REPO --release-sha FULL_SHA --apply
+   scripts/setup_vertex_wif.sh --project YOUR_PROJECT_ID --repos OWNER/REPO --release-sha TAG_OBJECT_SHA --release-sha COMMIT_SHA --apply
    ```
 
 2. Replace `gemini.yml`'s job. The caller must grant `id-token: write` itself, because a called workflow cannot raise its caller's permissions; granting it on the job keeps it from other jobs in the file:
@@ -136,7 +136,7 @@ AI Studio stops calls when a billing account reaches its [tier's monthly spend c
          contents: read
          pull-requests: write
          id-token: write
-       uses: jadedm/pr-review-workflows/.github/workflows/gemini-review-vertex.yml@FULL_SHA # v1.x.y
+       uses: jadedm/pr-review-workflows/.github/workflows/gemini-review-vertex.yml@COMMIT_SHA # v1.x.y
        with:
          stack: python
          vertex_project: YOUR_PROJECT_ID
@@ -144,7 +144,7 @@ AI Studio stops calls when a billing account reaches its [tier's monthly spend c
          service_account: pr-review-vertex@YOUR_PROJECT_ID.iam.gserviceaccount.com
    ```
 
-Pin the call to the commit you passed as `--release-sha`. A caller at `@v1` also signs in, but stops signing in when `v1` moves to a commit your setup does not list. To upgrade: rerun the setup script with the old and the new commit, change the pin, then rerun it with the new commit only.
+Pin the call to the commit you listed. A caller at `@v1` also signs in, but stops signing in whenever `v1` moves, until your setup lists the new tag object. To upgrade a pinned caller: rerun the setup script with the old and the new SHAs, change the pin, then rerun it with the new ones only.
 
 A `pull_request` run from a fork gets no OIDC token, so the review fails on it, as it does without secrets. An `@gemini` comment on a fork's pull request runs in your repository and does get one; nothing in the job runs the fork's files, but read the pull request before asking. The workflow has no `ref` input: its scripts always come from its own commit, because any step in a job holding `id-token: write` can ask for a token. For the same reason, on a self-hosted runner use ephemeral runners: a persistent machine can carry a tool left behind by an earlier job into this one.
 
