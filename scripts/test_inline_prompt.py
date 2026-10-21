@@ -61,13 +61,22 @@ check("3. says to load the tool with ToolSearch",
       f"select:{TOOL}" in BASE, "no ToolSearch select line for the tool")
 
 check("4. names the summary tool and says inline comments are allowed despite it",
-      SUMMARY_TOOL in BASE and re.search(r"inline comments[^.]*\b(are|is) (allowed|expected)", BASE) is not None,
+      SUMMARY_TOOL in BASE and re.search(r"inline comments[^.]*\b(are|is) (allowed|expected)", BASE, re.I) is not None,
       "base.md does not reconcile with the single-comment rule")
 
 check("5. asks for confirmed: true", "`confirmed: true`" in BASE, "confirmed: true missing")
 
 check("8. the old unnamed line is gone",
       "- Use inline review comments for specific code issues." not in BASE, "old line still present")
+
+# Gemini reads base.md too, and its tail wants findings in "issues", with
+# "summary" a short overview. Only the section for the reviewer with the tool
+# may talk about a summary comment.
+section = re.search(r"^### Inline comments \(when you have .*?(?=^## )", BASE, re.M | re.S)
+outside = BASE.replace(section.group(0), "") if section else BASE
+check("9. outside the tool section, base.md does not tell reviewers to use a summary",
+      section is not None and "summary" not in outside.lower(),
+      [l for l in outside.splitlines() if "summary" in l.lower()] or "section heading not found")
 
 print("Compose prompt step of claude-review.yml")
 work = pathlib.Path(tempfile.mkdtemp())
