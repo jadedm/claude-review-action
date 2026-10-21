@@ -143,10 +143,10 @@ check("B7 the check step's provider is fixed to vertex", "          PROVIDER: ve
 script = "\n".join(l[10:] for l in chk[chk.index("        run: |") + 1:]) + "\n" if "        run: |" in chk else "exit 1\n"
 
 
-def run(project="hyphn-studio-1013", location="global", model="gemini-4-argon", thinking="high"):
+def run(project="hyphn-studio-1013", location="global", model="gemini-4-argon", thinking="high", stack="python"):
     out = pathlib.Path(tempfile.mkstemp()[1])
     env = dict(os.environ, PROVIDER="vertex", VERTEX_PROJECT=project, VERTEX_LOCATION=location, GEMINI_MODEL=model,
-               THINKING_LEVEL=thinking, GITHUB_OUTPUT=str(out))
+               THINKING_LEVEL=thinking, STACK=stack, GITHUB_OUTPUT=str(out))
     p = subprocess.run(["bash", "-e", "-c", script], env=env, capture_output=True, text=True)
     url = out.read_text().partition("api_url=")[2].strip() or None
     out.unlink()
@@ -157,7 +157,8 @@ p, url = run()
 check("B7 a valid project gives the Vertex URL", p.returncode == 0 and url ==
       "https://aiplatform.googleapis.com/v1/projects/hyphn-studio-1013/locations/global/publishers/google/models/gemini-4-argon:generateContent", url)
 for label, kw in (("no project", dict(project="")), ("a bad project", dict(project="a/b")), ("a bad location", dict(location="us")),
-                  ("minimal on argon", dict(thinking="minimal")), ("a bad model", dict(model="x?y"))):
+                  ("minimal on argon", dict(thinking="minimal")), ("a bad model", dict(model="x?y")),
+                  ("58.10 a stack with ../", dict(stack="../../README"))):
     p, url = run(**kw)
     check(f"B7 {label}: refused, no URL", p.returncode != 0 and url is None, (p.returncode, p.stdout[-200:]))
 
