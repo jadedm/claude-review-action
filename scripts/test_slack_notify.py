@@ -138,7 +138,7 @@ with tempfile.TemporaryDirectory() as tmp:
                "<!channel> <!here> <@U123>", "PR #1: &lt;!channel&gt; &lt;!here&gt; &lt;@U123&gt;")
     title_case("T4 link syntax in the title is sent as text",
                "<https://example.com|click>", "PR #1: &lt;https://example.com|click&gt;")
-    title_case("T5 an entity in the title reads back as literal text", "&amp;", "PR #1: &amp;amp;")
+    title_case("T5 an entity in the title has its & escaped again", "&amp;", "PR #1: &amp;amp;")
     title_case("T6 * _ ~ ` pass through unchanged", "*bold* _it_ ~st~ `code`",
                "PR #1: *bold* _it_ ~st~ `code`")
     title_case("T7 bare @channel and @here pass through unchanged", "@channel @here",

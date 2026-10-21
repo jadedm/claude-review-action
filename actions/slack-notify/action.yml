@@ -14,10 +14,13 @@ inputs:
     required: false
     default: ""
     description: >-
-      Pull request title, sent as plain text: control characters become
-      spaces, it is cut to 200 characters, and &, < and > are escaped so it
-      cannot carry a mention or a link. Put {title} in the message where it
-      goes, rather than putting the raw title in the message.
+      Pull request title. Control characters become spaces, a title over
+      200 characters (counted as Unicode code points) keeps its first 200
+      and gets "..." added, and &, < and > are escaped, so it cannot carry
+      <...> markup: a user, channel or group mention, or a link with its own
+      label. Slack still applies * _ ~ ` formatting and still links a bare
+      URL as written. Put {title} in the message where it goes, rather than
+      putting the raw title in the message.
 
 runs:
   using: composite
