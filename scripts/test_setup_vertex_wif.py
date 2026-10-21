@@ -6,8 +6,9 @@ Runs the script with stub gcloud and gh first on PATH. The stubs log every
 call and answer as a project with nothing set up yet, so a dry run shows the
 condition the script would set. For the grant cases (G), gcloud answers the
 role list, role permissions, service account list and both IAM policies from
-files in STUB_FIX, fails a read when NAME.fail exists there, and applies
-remove-iam-policy-binding and roles update to those files. Standard library only.
+files in STUB_FIX (role_stage defaults to GA), fails a read when NAME.fail
+exists there, and applies remove-iam-policy-binding and roles update to those
+files. Standard library only.
 """
 import os
 import pathlib
@@ -40,13 +41,21 @@ f=""
 case "$*" in
   "projects describe"*) echo 281419067788; exit 0 ;;
   "iam roles list"*) f=roles_list ;;
+  "iam roles describe"*"value(stage)"*) [ -e "$fix/role_stage" ] && cat "$fix/role_stage" || echo GA; exit 0 ;;
   "iam roles describe"*) f=role_perms ;;
   "iam service-accounts list"*) f=sa_list ;;
   "projects get-iam-policy"*) f=project_policy ;;
   "iam service-accounts get-iam-policy"*) f=sa_policy ;;
   "projects remove-iam-policy-binding"*) f=project_policy; op=remove ;;
   "iam service-accounts remove-iam-policy-binding"*) f=sa_policy; op=remove ;;
-  "iam roles update"*) echo aiplatform.endpoints.predict > "$fix/role_perms"; exit 0 ;;
+  "iam roles update"*"--add-permissions"*)
+    [ -e "$fix/role_perms" ] || exit 0
+    echo GA > "$fix/role_stage"
+    grep -q aiplatform.endpoints.predict "$fix/role_perms" && exit 0
+    perms=$(cat "$fix/role_perms")
+    echo "${perms:+$perms;}aiplatform.endpoints.predict" > "$fix/role_perms"
+    exit 0 ;;
+  "iam roles update"*) echo aiplatform.endpoints.predict > "$fix/role_perms"; echo GA > "$fix/role_stage"; exit 0 ;;
   *" describe "*) exit 1 ;;
 esac
 if [ "${op:-}" = remove ]; then
@@ -161,9 +170,9 @@ with tempfile.TemporaryDirectory() as tmp:
 
     def beyond(out):
         lines = out.splitlines()
-        if "Beyond the expected set:" not in lines:
+        if "Not as expected:" not in lines:
             return None
-        i = len(lines) - 1 - lines[::-1].index("Beyond the expected set:")
+        i = len(lines) - 1 - lines[::-1].index("Not as expected:")
         rest = []
         for line in lines[i + 1:]:
             if not line.startswith("  "):
@@ -172,6 +181,7 @@ with tempfile.TemporaryDirectory() as tmp:
         return rest
 
     removes = ("remove-iam-policy-binding", "roles update")
+    narrowing = ("remove-iam-policy-binding", "--permissions ")
     sha = ["--release-sha", SHA_A]
 
     code, out, calls = run(*base, *sha)
@@ -221,7 +231,8 @@ with tempfile.TemporaryDirectory() as tmp:
         f"gcloud projects remove-iam-policy-binding p1 --member serviceAccount:{SA} --role roles/editor --all",
         f"gcloud iam service-accounts remove-iam-policy-binding {SA} --project p1 --member {M222} --role {WIU} --all",
         f"gcloud iam service-accounts remove-iam-policy-binding {SA} --project p1 --member user:someone@example.com --role roles/iam.serviceAccountTokenCreator --all",
-        "gcloud iam roles update prReviewVertexPredict --project p1 --permissions aiplatform.endpoints.predict",
+        "gcloud iam roles update prReviewVertexPredict --project p1 --add-permissions aiplatform.endpoints.predict --stage GA",
+        "gcloud iam roles update prReviewVertexPredict --project p1 --permissions aiplatform.endpoints.predict --stage GA",
     ]
     check("G8 --prune --apply: one remove per extra, the role reset, listed repository kept, then none and exit 0",
           code == 0 and sorted(rm) == sorted(want) and beyond(out) == ["none"]
@@ -229,8 +240,23 @@ with tempfile.TemporaryDirectory() as tmp:
 
     code, out, calls = run(*base, *sha, "--apply", fix=fixture(**ALL))
     check("G9 --apply without --prune: bindings added, nothing removed, exit 1 naming the extras",
-          code == 1 and "add-iam-policy-binding" in calls and not any(w in calls for w in removes)
+          code == 1 and "add-iam-policy-binding" in calls and not any(w in calls for w in narrowing)
           and len(beyond(out)) == 4 and "Rerun with --prune --apply" in out, (code, out[-600:]))
+
+    code, out, calls = run(*base, *sha, fix=fixture(role_perms="storage.objects.get"))
+    check("G14 the custom role lacks predict: exit 1, names it and the extra",
+          code == 1 and beyond(out) == ["role prReviewVertexPredict has permission storage.objects.get",
+                                        "role prReviewVertexPredict lacks permission aiplatform.endpoints.predict"], (code, beyond(out)))
+
+    code, out, calls = run(*base, *sha, fix=fixture(role_stage="DISABLED"))
+    check("G15 the custom role is disabled: exit 1, names the stage", code == 1
+          and beyond(out) == ["role prReviewVertexPredict is at stage DISABLED, not GA"], (code, beyond(out)))
+
+    fx = fixture(role_perms="", role_stage="DISABLED")
+    code, out, calls = run(*base, *sha, "--apply", fix=fx)
+    check("G16 --apply without --prune restores predict and GA: then none, exit 0",
+          code == 0 and beyond(out) == ["none"] and (fx / "role_perms").read_text().strip() == "aiplatform.endpoints.predict"
+          and "remove-iam-policy-binding" not in calls, (code, out[-500:], calls))
 
     for label, name in [("project policy", "project_policy"), ("service account policy", "sa_policy"),
                         ("role list", "roles_list"), ("service account list", "sa_list")]:

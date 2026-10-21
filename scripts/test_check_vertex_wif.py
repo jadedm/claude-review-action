@@ -123,22 +123,37 @@ with tempfile.TemporaryDirectory() as tmp:
     check("8 lightweight v1: one SHA, checked once in the list, exit 0 when listed",
           code == 0 and out.count("in the SHA list") == 1, (code, out))
 
+    def not_canonical(code, out):
+        return code == 1 and "not in the form setup_vertex_wif.sh writes" in out and "listed" not in out
+
     code, out, calls = run(cond=f'assertion.job_workflow_ref == "{WORKFLOW}@refs/tags/v1" || '
                                 f'assertion.job_workflow_ref == "{WORKFLOW}@{COMMIT}"')
-    m = missing(out)
-    check("9 no job_workflow_sha list: exit 1, says so",
-          code == 1 and m[0] == "a job_workflow_sha list in the condition" and len(m) == 3, (code, out))
+    check("9 no job_workflow_sha list: exit 1, not the expected form", not_canonical(code, out), (code, out))
+
+    for label, cond in [
+        ("always true in front", "true || " + BOTH),
+        ("always true behind", BOTH + " || true"),
+        ("a negated ref", BOTH.replace(f'== "{WORKFLOW}@refs/tags/v1"', f'!= "{WORKFLOW}@refs/tags/v1"')),
+        ("the SHA list on another attribute", BOTH.replace("assertion.job_workflow_sha in", "assertion.sub in")),
+        ("another workflow admitted", BOTH.replace(f'"{WORKFLOW}@refs/tags/v1"', '"other/repo/.github/workflows/x.yml@refs/tags/v1"')),
+        ("no repository list", BOTH.split(" && assertion.repository_id")[0]),
+        ("the values only inside a comment-like string",
+         f'assertion.repository_id in ["1"] && "{WORKFLOW}@refs/tags/v1 {TAG} {COMMIT}" != ""'),
+    ]:
+        code, out, calls = run(cond=cond)
+        check(f"15 {label}: exit 1, not the expected form", not_canonical(code, out), (code, out))
 
     code, out, calls = run(cond=condition([TAG, COMMIT], [COMMIT]))
     check("10 @refs/tags/v1 not admitted: exit 1, names it",
           code == 1 and missing(out) == ["ref @refs/tags/v1 (callers at @v1)"], (code, out))
 
     code, out, calls = run(cond=condition([TAG + "0", "0" + COMMIT], ["refs/tags/v1", COMMIT]))
-    check("11 SHAs present only inside longer strings: not counted, exit 1",
-          code == 1 and len(missing(out)) == 2, (code, out))
+    check("11 SHAs present only inside longer strings: refused, exit 1",
+          code == 1 and "admits the current v1" not in out, (code, out))
 
     code, out, calls = run(cond=condition([TAG, COMMIT], ["refs/tags/v1", COMMIT], quote="'").replace(", ", ","))
-    check("13 single quotes and no spaces (a hand-edited condition): exit 0", code == 0, (code, out))
+    check("13 single quotes and no spaces (a hand-edited condition): exit 1, not the expected form",
+          not_canonical(code, out), (code, out))
 
     for label, args in [("no --project", ()), ("bad project id", ("--project", "Bad_Id")),
                         ("unknown flag", ("--project", "hyphn-studio-1013", "--apply"))]:

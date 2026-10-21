@@ -123,7 +123,7 @@ AI Studio stops calls when a billing account reaches its [tier's monthly spend c
    scripts/setup_vertex_wif.sh --project YOUR_PROJECT_ID --repos OWNER/REPO --release-sha TAG_OBJECT_SHA --release-sha COMMIT_SHA --apply
    ```
 
-   Every run also lists any grant the service account holds, or any binding on it, beyond the expected set, and exits 1 while there is one; `--prune --apply` removes them. A rerun must list every repository that keeps access, since a binding for an unlisted one counts as extra. [`scripts/check_vertex_wif.sh --project YOUR_PROJECT_ID`](scripts/check_vertex_wif.sh) reads the live condition and the current `v1` and exits non-zero naming any SHA or ref the condition does not admit; it changes nothing.
+   Every run also reads the custom role, the project's IAM policy and the service account's own policy, lists any grant or binding there beyond the expected set, and exits 1 while there is one; `--prune --apply` removes them. Grants from a folder or organisation, through a group, or on other resources are not read. A rerun must list every repository that keeps access, since a binding for an unlisted one counts as extra. [`scripts/check_vertex_wif.sh --project YOUR_PROJECT_ID`](scripts/check_vertex_wif.sh) reads the live condition and the current `v1` and exits non-zero naming any SHA or ref the condition does not admit; it changes nothing.
 
 2. Replace `gemini.yml`'s job. The caller must grant `id-token: write` itself, because a called workflow cannot raise its caller's permissions; granting it on the job keeps it from other jobs in the file:
 

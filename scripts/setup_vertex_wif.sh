@@ -31,13 +31,15 @@
 # So another workflow in a listed repository cannot get a token.
 #
 # Every run also reads what the service account can do and who can act as it,
-# and lists anything beyond the expected set (#65): a project role other than
-# the custom one, a permission in the custom role other than
-# aiplatform.endpoints.predict, and any binding on the service account other
+# and lists anything not as expected (#65): a project role other than the
+# custom one, a permission in the custom role other than
+# aiplatform.endpoints.predict, predict missing from it or the role not at
+# stage GA (--apply restores both), and any binding on the service account other
 # than roles/iam.workloadIdentityUser for a repository passed in --repos. The
 # run exits 1 while anything is listed. --prune with --apply removes it; a
 # repository dropped from --repos loses its binding this way. Only the
-# project's own policy is read, not folder or organisation grants. A policy
+# project's own policy and the service account's are read: not folder or
+# organisation grants, grants through groups, or grants on other resources. A policy
 # that cannot be read stops the run (exit 3), never a clean report.
 #
 # Without --apply it prints what is there and what it would set. Reruns change
@@ -136,21 +138,32 @@ is_member() {
   return 1
 }
 
-# Fills extras with one "kind<TAB>role or permission<TAB>member" line per grant
-# beyond the expected set.
-find_extras() {
-  extras=()
-  local roles perms perm sa_found rows role member
+# Adds to extras what differs in the custom role: a permission other than
+# predict, predict missing, or a stage other than GA. A role not created yet
+# adds nothing; --apply creates it.
+role_extras() {
+  local roles perms perm stage
   roles=$(gcloud iam roles list --project "$project" --format='value(name)' 2>"$errf") \
     || cannot_read "listing the custom roles of ${project}"
-  if grep -qxF "$role_name" <<<"$roles"; then
-    perms=$(gcloud iam roles describe "$role_id" --project "$project" --format='value(includedPermissions)' 2>"$errf") \
-      || cannot_read "reading role ${role_name}"
-    for perm in ${perms//;/ }; do
-      [ "$perm" = "$predict" ] && continue
-      extras+=("permission${tab}${perm}${tab}-")
-    done
-  fi
+  grep -qxF "$role_name" <<<"$roles" || return 0
+  perms=$(gcloud iam roles describe "$role_id" --project "$project" --format='value(includedPermissions)' 2>"$errf") \
+    || cannot_read "reading role ${role_name}"
+  stage=$(gcloud iam roles describe "$role_id" --project "$project" --format='value(stage)' 2>"$errf") \
+    || cannot_read "reading role ${role_name}"
+  for perm in ${perms//;/ }; do
+    [ "$perm" = "$predict" ] && continue
+    extras+=("permission${tab}${perm}${tab}-")
+  done
+  [[ ";${perms};" == *";${predict};"* ]] || extras+=("lacks${tab}${predict}${tab}-")
+  [ "$stage" = GA ] || extras+=("stage${tab}${stage:-unset}${tab}-")
+}
+
+# Fills extras with one "kind<TAB>role or permission<TAB>member" line per
+# difference from the expected set.
+find_extras() {
+  extras=()
+  local sa_found rows role member
+  role_extras
   sa_found=$(gcloud iam service-accounts list --project "$project" --filter="email=${sa}" --format='value(email)' 2>"$errf") \
     || cannot_read "listing the service accounts of ${project}"
   [ -n "$sa_found" ] || return 0
@@ -174,12 +187,14 @@ find_extras() {
 
 report_extras() {
   local e kind what member
-  echo "Beyond the expected set:"
+  echo "Not as expected:"
   [ ${#extras[@]} -gt 0 ] || { echo "  none"; return 0; }
   for e in "${extras[@]}"; do
     IFS=$'\t' read -r kind what member <<<"$e"
     case "$kind" in
       permission) echo "  role ${role_id} has permission ${what}" ;;
+      lacks) echo "  role ${role_id} lacks permission ${what}" ;;
+      stage) echo "  role ${role_id} is at stage ${what}, not GA" ;;
       project) echo "  ${sa} holds ${what} on project ${project}" ;;
       account) echo "  ${member} has ${what} on ${sa}" ;;
     esac
@@ -191,14 +206,14 @@ prune_extras() {
   for e in "${extras[@]}"; do
     IFS=$'\t' read -r kind what member <<<"$e"
     case "$kind" in
-      permission) reset=1 ;;
+      permission|lacks|stage) reset=1 ;;
       project) gcloud projects remove-iam-policy-binding "$project" --member "$member" --role "$what" --all > /dev/null ;;
       account) gcloud iam service-accounts remove-iam-policy-binding "$sa" --project "$project" \
                  --member "$member" --role "$what" --all > /dev/null ;;
     esac
   done
   [ "$reset" -eq 1 ] || return 0
-  gcloud iam roles update "$role_id" --project "$project" --permissions "$predict" > /dev/null
+  gcloud iam roles update "$role_id" --project "$project" --permissions "$predict" --stage GA > /dev/null
 }
 
 echo
@@ -240,6 +255,8 @@ fi
 gcloud iam roles describe "$role_id" --project "$project" > /dev/null 2>&1 \
   || gcloud iam roles create "$role_id" --project "$project" --title "PR review: Vertex AI generateContent" \
        --permissions aiplatform.endpoints.predict --stage GA > /dev/null
+# Adds predict and sets GA if either was changed by hand; removes nothing.
+gcloud iam roles update "$role_id" --project "$project" --add-permissions "$predict" --stage GA > /dev/null
 [ -n "$(gcloud iam service-accounts list --project "$project" --filter="email=${sa}" --format='value(email)')" ] \
   || gcloud iam service-accounts create "$sa_name" --project "$project" --display-name "PR review, Vertex AI calls only"
 gcloud projects add-iam-policy-binding "$project" --member "serviceAccount:${sa}" \
