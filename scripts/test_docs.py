@@ -80,13 +80,16 @@ print("inputs and secrets")
 claude_in, claude_sec = workflow_call("claude-review.yml")
 gemini_in, gemini_sec = workflow_call("gemini-review.yml")
 both, gemini_only = readme_table("Both workflows"), readme_table("Gemini only")
-check("R2 the 'Both workflows' table lists exactly the Claude inputs", set(both) == set(claude_in), (sorted(both), sorted(claude_in)))
+claude_only = readme_table("Claude only")
+check("R2 'Both' plus 'Claude only' lists exactly the Claude inputs", set(both) | set(claude_only) == set(claude_in),
+      (sorted(set(both) | set(claude_only)), sorted(claude_in)))
 check("R2 'Both' plus 'Gemini only' lists exactly the Gemini inputs", set(both) | set(gemini_only) == set(gemini_in),
       (sorted(set(both) | set(gemini_only)), sorted(gemini_in)))
 wrong = [(k, v, norm(gemini_in.get(k))) for k, v in {**both, **gemini_only}.items() if v != norm(gemini_in.get(k))]
-wrong += [(k, v, norm(claude_in.get(k))) for k, v in both.items() if v != norm(claude_in.get(k))]
+wrong += [(k, v, norm(claude_in.get(k))) for k, v in {**both, **claude_only}.items() if v != norm(claude_in.get(k))]
 check("R2 every default in the README equals the workflow's", not wrong, wrong)
-mistyped = [(k, t, TYPES["gemini-review.yml"].get(k)) for k, t in README_TYPES.items() if t != TYPES["gemini-review.yml"].get(k)]
+mistyped = [(k, t, TYPES["gemini-review.yml"].get(k)) for k, t in README_TYPES.items()
+            if k not in claude_only and t != TYPES["gemini-review.yml"].get(k)]
 mistyped += [(k, README_TYPES[k], t) for k, t in TYPES["claude-review.yml"].items() if README_TYPES.get(k) != t]
 check("R2 every type in the README equals the workflow's", not mistyped, mistyped)
 vertex_in, vertex_sec = workflow_call("gemini-review-vertex.yml")
@@ -134,16 +137,16 @@ check("R2 the quickstart lists every stack prompt and no others", [s for s in li
 print("line references")
 # The exact citation in the README, the file, the lines, and text that must be on them.
 CITES = [
-    ("`claude-review.yml:139`", "claude-review.yml", 139, 139, "scripts/base_file.py"),
+    ("`claude-review.yml:147`", "claude-review.yml", 147, 147, "scripts/base_file.py"),
     ("`gemini-review.yml:308`", "gemini-review.yml", 308, 308, "scripts/base_file.py"),
-    ("`claude-review.yml:64`", "claude-review.yml", 64, 64, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
-    ("`:80`", "claude-review.yml", 80, 80, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
-    ("`:171`", "claude-review.yml", 171, 171, "anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9"),
+    ("`claude-review.yml:72`", "claude-review.yml", 72, 72, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
+    ("`:88`", "claude-review.yml", 88, 88, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
+    ("`:179`", "claude-review.yml", 179, 179, "anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9"),
     ("lines 32 to 66", "../../scripts/gemini_review_comment.py", 32, 66, 'text.replace("@", "@" + ZWSP)'),
     ("`gemini_review_comment.py:91-127`", "../../scripts/gemini_review_comment.py", 91, 127, '"### Not reviewed"'),
-    ("`claude-review.yml:254`", "claude-review.yml", 254, 254, "Say when Claude did not review"),
-    ("`claude-review.yml:218-220`", "claude-review.yml", 218, 220, "--disallowedTools \"Edit,MultiEdit,Write"),
-    ("`claude-review.yml:42-50`", "claude-review.yml", 42, 50, '["OWNER","MEMBER","COLLABORATOR"]'),
+    ("`claude-review.yml:262`", "claude-review.yml", 262, 262, "Say when Claude did not review"),
+    ("`claude-review.yml:226-228`", "claude-review.yml", 226, 228, "--disallowedTools \"Edit,MultiEdit,Write"),
+    ("`claude-review.yml:49-58`", "claude-review.yml", 49, 58, '["OWNER","MEMBER","COLLABORATOR"]'),
     ("`gemini-review.yml:85-94`", "gemini-review.yml", 85, 94, '["OWNER","MEMBER","COLLABORATOR"]'),
 ]
 for cite, name, start, end, needle in CITES:
