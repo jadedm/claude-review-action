@@ -264,7 +264,7 @@ jobs:
         # claude-code-action sets its conclusion output only when Claude ran.
         # When it stops early it can exit green with a warning in the log and
         # nothing on the pull request, so a green check read as reviewed (#15).
-        # Say so once on the pull request. Its workflow validation skip, the
+        # Say so on the pull request, once per marker key (below). Its workflow validation skip, the
         # case this was written for, comes from the App token exchange and no
         # longer happens with github_token (#66); the notice stays for any
         # other early exit. This rests on the pinned action (v1.0.251): a run

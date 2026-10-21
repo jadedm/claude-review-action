@@ -138,13 +138,17 @@ check("68.7 no key: the earlier-notice check is skipped and the notice is posted
       p.returncode == 0 and len(posted) == 1 and "not checking for an earlier notice" in p.stdout, (p.stdout, posted))
 notice = WORKFLOW.read_text().split("      - name: Say when Claude did not review", 1)[1].split("\n      - name:", 1)[0]
 SENTINEL = "sentinel-key-6f1e2d"
-leaks = []
-for comments in ((), [("github-actions[bot]", same[0])]):
-    p, posted, output = run(["src/a.py"], comments=comments, key=SENTINEL)
+leaks, paths = [], []
+first = []
+for _ in range(2):  # first run posts; second finds that notice and stops
+    p, posted, output = run(["src/a.py"], comments=[("github-actions[bot]", b) for b in first], key=SENTINEL)
+    paths.append((p.returncode, len(posted), "not posting again" in p.stdout))
     leaks += [where for where, text in (("stdout", p.stdout), ("stderr", p.stderr), ("output", output), ("comment", "".join(posted)))
               if SENTINEL in text]
-check("68.8 the key comes in through env only, and no output, log or comment holds it",
-      "          MARKER_KEY: ${{ secrets.claude_oauth_token }}" in notice and "secrets." not in SCRIPT and not leaks, (leaks, notice[-400:]))
+    first = first or posted
+check("68.8 the key comes in through env only, and no output, log or comment holds it, on the posting and the already-said path",
+      "          MARKER_KEY: ${{ secrets.claude_oauth_token }}" in notice and "secrets." not in SCRIPT and not leaks
+      and paths == [(0, 1, False), (0, 0, True)], (leaks, paths))
 tags = {keyed(), keyed(pr="8"), keyed(key="other"), keyed(repo="o/s")}
 check("68.9 the marker value is 32 hex characters and differs by pull request, repository and key",
       len(tags) == 4 and all(len(m.split()[-2]) == 32 and int(m.split()[-2], 16) >= 0 for m in tags), tags)
