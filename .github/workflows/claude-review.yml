@@ -68,6 +68,18 @@ jobs:
     # No id-token: claude-code-action is given this job's token below, so it
     # has no OIDC exchange to make (#66).
     steps:
+      - name: Check the stack
+        # Its own step, before anything else, as in the Gemini workflow. The
+        # stack names a file, prompts/<stack>.md; a path such as ../x would
+        # read another file into the prompt (#58).
+        env:
+          STACK: ${{ inputs.stack }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$STACK" =~ ^[a-z0-9-]+$ ]]; then
+            echo "::error::stack must be a prompt name such as python (lowercase letters, digits and -), got '${STACK}'"; exit 1
+          fi
+
       - name: Checkout consumer repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -115,9 +127,18 @@ jobs:
           ROOT=".claude-review-action"
           BASE="$ROOT/prompts/base.md"
           STACK_FILE="$ROOT/prompts/${STACK}.md"
+          # Instructions only Claude can follow (the inline comment tool) go
+          # last, in their own file: Gemini reads base.md too (#69).
+          TAIL="$ROOT/prompts/_claude-tail.md"
 
           if [ ! -f "$BASE" ]; then
             echo "::error::base prompt not found at $BASE"; exit 1
+          fi
+          # A ref from before the tail existed keeps working: its base.md
+          # carries that release's own output instructions.
+          if [ ! -f "$TAIL" ]; then
+            echo "::warning::Claude prompt tail not found at $TAIL; reviewing without it"
+            TAIL=/dev/null
           fi
           if [ ! -f "$STACK_FILE" ]; then
             echo "::error::stack prompt '${STACK}' not found at $STACK_FILE"; exit 1
@@ -162,6 +183,8 @@ jobs:
               render_extras_header_once
               printf '%s\n' "$EXTRA_PROMPT"
             fi
+            echo ""
+            cat "$TAIL"
           } > /tmp/prompt.md
 
           # A random end marker: the prompt holds the pull request's extras file, and
@@ -338,7 +361,9 @@ jobs:
         uses: ./.claude-review-action/actions/slack-notify
         with:
           webhook_url: ${{ secrets.slack_webhook_url }}
+          # The action escapes the title and puts it where {title} is (#62, #75).
+          title: ${{ github.event.pull_request.title }}
           message: |
-            🤖 *Claude* on PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+            🤖 *Claude* on PR #${{ github.event.pull_request.number }}: {title}
             Repo: ${{ github.repository }} | Status: ${{ steps.skipped.outputs.reviewed == 'false' && '⚠️ Not reviewed (see the comment on the PR)' || (job.status == 'success' && '✅ Completed' || '❌ Failed') }}
             <${{ github.event.pull_request.html_url }}|View PR>

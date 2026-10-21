@@ -84,13 +84,13 @@ About five minutes for both reviewers.
 
 Each point names the file that does it.
 
-- **The review rules come from the base branch.** Your repo's rules file (`extra_prompt_path`) is read from the pull request's base commit (the base branch as the pull request records it) through the GitHub API, never from the pull request, so a pull request cannot rewrite the rules its own review follows. [`scripts/base_file.py`](scripts/base_file.py), called at `claude-review.yml:147` and `gemini-review.yml:336`.
-- **Every third-party action is pinned to a commit.** Whoever controls an upstream repo can move its tags, and these steps hold your tokens. The pins are at `claude-review.yml:72`, `:88` and `:179`; [`.github/dependabot.yml`](.github/dependabot.yml) opens a pull request each week when a pinned action has a newer release.
+- **The review rules come from the base branch.** Your repo's rules file (`extra_prompt_path`) is read from the pull request's base commit (the base branch as the pull request records it) through the GitHub API, never from the pull request, so a pull request cannot rewrite the rules its own review follows. [`scripts/base_file.py`](scripts/base_file.py), called at `claude-review.yml:168` and `gemini-review.yml:341`.
+- **Every third-party action is pinned to a commit.** Whoever controls an upstream repo can move its tags, and these steps hold your tokens. The pins are at `claude-review.yml:84`, `:100` and `:202`; [`.github/dependabot.yml`](.github/dependabot.yml) opens a pull request each week when a pinned action has a newer release.
 - **Model output is made safe before it is posted.** Gemini reads the pull request, so its reply is treated as untrusted: no @-mentions, links, images, HTML or bidirectional control characters reach the comment, and each field is capped. [`scripts/gemini_review_comment.py`](scripts/gemini_review_comment.py), lines 32 to 66.
 - **Large pull requests are split, and the comment says what was not reviewed.** A pull request over the per-call limits is split into up to `max_chunks` parallel calls whose findings merge into one comment. Files that fit no call are listed under "Not reviewed" with the reason. [`scripts/gemini_chunks.py`](scripts/gemini_chunks.py), [`scripts/gemini_review_merge.py`](scripts/gemini_review_merge.py), and the list at `gemini_review_comment.py:91-127`.
-- **When Claude does not review, the pull request says so.** claude-code-action can skip a review and still show a green check. This posts one comment naming the cause and a warning in the run, and the Slack message says "Not reviewed". `claude-review.yml:262`.
-- **The Claude reviewer is denied writes.** File edits, commits, pushes, tags and `gh` are denied, and so are reads of the places on a runner known to hold credentials. These are deny rules for named tools and paths, not a sandbox; see Security below. `claude-review.yml:226-228`.
-- **Strangers cannot spend your quota.** On a public repo only owners, members and collaborators can start a review by comment, and only a new comment counts, not an edited one. On a private repo Claude applies the same check when `require_role_on_private` is set. `claude-review.yml:49-58`, `gemini-review.yml:85-94`.
+- **When Claude does not review, the pull request says so.** claude-code-action can skip a review and still show a green check. This posts one comment naming the cause and a warning in the run, and the Slack message says "Not reviewed". `claude-review.yml:285`.
+- **The Claude reviewer is denied writes.** File edits, commits, pushes, tags and `gh` are denied, and so are reads of the places on a runner known to hold credentials. These are deny rules for named tools and paths, not a sandbox; see Security below. `claude-review.yml:249-251`.
+- **Strangers cannot spend your quota.** On a public repo only owners, members and collaborators can start a review by comment, and only a new comment counts, not an edited one. On a private repo each workflow applies the same check when its `require_role_on_private` is set. `claude-review.yml:49-58`, `gemini-review.yml:90-99`.
 - **Two model families.** Claude and Gemini review independently. They miss different things, and where they disagree is often the most useful part of the review.
 
 The workflow files are in [`.github/workflows/`](.github/workflows).
@@ -175,18 +175,13 @@ If both are set, the file comes first. Claude also reads the repo's `CLAUDE.md` 
 
 | Input | Type | Default | Description |
 |---|---|---|---|
-| `stack` | string | required | Prompt name in `prompts/<stack>.md` |
+| `stack` | string | required | Prompt name in `prompts/<stack>.md`: lowercase letters, digits and `-`. A value with any other character fails the run before checkout |
 | `runner` | string (JSON) | `"ubuntu-latest"` | `runs-on` value, JSON-encoded, for example `'["self-hosted", "linux"]'` |
 | `ref` | string | `''` | Ref of this repo to load prompts, scripts and the Slack action from. Empty means the commit of the workflow that is running, so `@v1.6.14` or `@<sha>` also fixes them. It names a ref in the repo whose workflow is running, so a fork's caller needs a ref that exists in the fork. On GitHub Enterprise Server, which lacks that context, empty means `v1` |
 | `slack_notify` | boolean | `false` | Post a Slack message when a `pull_request` run ends (not on comment runs). Pass `slack_webhook_url` under `secrets:` as well |
 | `extra_prompt` | string | `''` | Inline repo-specific notes |
 | `extra_prompt_path` | string | `''` | Path in your repo to a markdown file of repo-specific notes, read from the base branch |
-
-### Claude only
-
-| Input | Type | Default | Description |
-|---|---|---|---|
-| `require_role_on_private` | boolean | `false` | On a private repo, start a review from an `@claude` comment only when its author is an owner, member or collaborator. Off by default because `author_association` can report a member whose organisation membership is private as `CONTRIBUTOR` or `NONE`, and then refuses them |
+| `require_role_on_private` | boolean | `false` | On a private repo, start a review from an `@claude` or `@gemini` comment only when its author is an owner, member or collaborator. Off by default because `author_association` can report a member whose organisation membership is private as `CONTRIBUTOR` or `NONE`, and then refuses them |
 
 ### Gemini only
 
@@ -262,7 +257,7 @@ Add `prompts/<name>.md` with that stack's conventions, free of any one project's
 .github/workflows/gemini-review.yml   reusable Gemini workflow
 .github/workflows/tests.yml           this repo's own tests
 actions/slack-notify/                 Slack message, used by both
-prompts/                              base rules and one file per stack
+prompts/                              base rules, one file per stack, and each reviewer's output instructions (_claude-tail.md, _gemini-tail.md)
 scripts/                              Gemini payload, merge and comment; base-branch reader; tests
 ```
 

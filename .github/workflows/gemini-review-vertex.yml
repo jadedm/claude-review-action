@@ -73,6 +73,10 @@ on:
         description: 'Optional path (relative to the consumer repo root) to a markdown file whose contents are appended after the stack prompt — e.g. .github/review-extras.md. Cleaner than a multi-line YAML string for long-form repo-specific conventions. If both extra_prompt and extra_prompt_path are set, both are appended (file contents first, then inline string).'
         type: string
         default: ''
+      require_role_on_private:
+        description: 'On a private repo, start a review from an @gemini comment only when its author is an owner, member or collaborator, as on a public repo. Off by default: author_association can report a member whose organisation membership is private as CONTRIBUTOR or NONE (#64)'
+        type: boolean
+        default: false
     secrets:
       slack_webhook_url:
         required: false
@@ -92,8 +96,9 @@ jobs:
     #     replies (parity with the Claude reusable, which already handles this)
     # On a public repo anyone can comment, and each comment spends the
     # caller's API quota; only people with a role in the repo may trigger it.
-    # Private repos skip the check: only people with access can comment, and
-    # author_association can misreport private org membership.
+    # Private repos skip the check unless require_role_on_private is set: only
+    # people with access can comment, and author_association can misreport
+    # private org membership (#64).
     # A comment counts only when it is new: an edited or deleted one would
     # bill another review.
     if: >
@@ -104,7 +109,7 @@ jobs:
         contains(github.event.comment.body, '@gemini')) ||
        (github.event_name == 'pull_request_review_comment' &&
         contains(github.event.comment.body, '@gemini'))) &&
-      (github.event.repository.private ||
+      ((github.event.repository.private && !inputs.require_role_on_private) ||
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)))
     runs-on: ${{ fromJSON(inputs.runner) }}
     # This job reads the pull request and calls the model, and cannot write
@@ -732,8 +737,10 @@ jobs:
         uses: ./.claude-review-action/actions/slack-notify
         with:
           webhook_url: ${{ secrets.slack_webhook_url }}
+          # The action escapes the title and puts it where {title} is (#62, #75).
+          title: ${{ github.event.pull_request.title }}
           message: |
-            💎 *Gemini* reviewed PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+            💎 *Gemini* reviewed PR #${{ github.event.pull_request.number }}: {title}
             Repo: ${{ github.repository }} | Assessment: ${{ steps.post-review.outputs.assessment || 'error' }} | Issues: ${{ steps.post-review.outputs.issue_count || '?' }}
             <${{ github.event.pull_request.html_url }}|View PR>
 

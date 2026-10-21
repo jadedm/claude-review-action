@@ -61,6 +61,8 @@ def workflow_call(name):
 
 def readme_table(heading):
     """{input: default} from the README table under a heading."""
+    if f"### {heading}\n" not in README:
+        return {}  # a table with no rows is left out; the R2 checks still need every input listed
     block = README.split(f"### {heading}\n", 1)[1].split("\n\n#", 1)[0]
     rows = {}
     for line in block.splitlines():
@@ -137,17 +139,17 @@ check("R2 the quickstart lists every stack prompt and no others", [s for s in li
 print("line references")
 # The exact citation in the README, the file, the lines, and text that must be on them.
 CITES = [
-    ("`claude-review.yml:147`", "claude-review.yml", 147, 147, "scripts/base_file.py"),
-    ("`gemini-review.yml:336`", "gemini-review.yml", 336, 336, "scripts/base_file.py"),
-    ("`claude-review.yml:72`", "claude-review.yml", 72, 72, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
-    ("`:88`", "claude-review.yml", 88, 88, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
-    ("`:179`", "claude-review.yml", 179, 179, "anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9"),
+    ("`claude-review.yml:168`", "claude-review.yml", 168, 168, "scripts/base_file.py"),
+    ("`gemini-review.yml:341`", "gemini-review.yml", 341, 341, "scripts/base_file.py"),
+    ("`claude-review.yml:84`", "claude-review.yml", 84, 84, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
+    ("`:100`", "claude-review.yml", 100, 100, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
+    ("`:202`", "claude-review.yml", 202, 202, "anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9"),
     ("lines 32 to 66", "../../scripts/gemini_review_comment.py", 32, 66, 'text.replace("@", "@" + ZWSP)'),
     ("`gemini_review_comment.py:91-127`", "../../scripts/gemini_review_comment.py", 91, 127, '"### Not reviewed"'),
-    ("`claude-review.yml:262`", "claude-review.yml", 262, 262, "Say when Claude did not review"),
-    ("`claude-review.yml:226-228`", "claude-review.yml", 226, 228, "--disallowedTools \"Edit,MultiEdit,Write"),
+    ("`claude-review.yml:285`", "claude-review.yml", 285, 285, "Say when Claude did not review"),
+    ("`claude-review.yml:249-251`", "claude-review.yml", 249, 251, "--disallowedTools \"Edit,MultiEdit,Write"),
     ("`claude-review.yml:49-58`", "claude-review.yml", 49, 58, '["OWNER","MEMBER","COLLABORATOR"]'),
-    ("`gemini-review.yml:85-94`", "gemini-review.yml", 85, 94, '["OWNER","MEMBER","COLLABORATOR"]'),
+    ("`gemini-review.yml:90-99`", "gemini-review.yml", 90, 99, '["OWNER","MEMBER","COLLABORATOR"]'),
 ]
 for cite, name, start, end, needle in CITES:
     lines = (WF / name).resolve().read_text().splitlines()[start - 1:end]

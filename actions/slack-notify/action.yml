@@ -14,7 +14,8 @@ inputs:
     required: false
     default: ""
     description: >-
-      Pull request title. Control characters become spaces, a title over
+      Pull request title. Control characters become spaces, bidirectional
+      control characters are removed, a title over
       200 characters (counted as Unicode code points) keeps its first 200
       and gets "..." added, and &, < and > are escaped, so it cannot carry
       <...> markup: a user, channel or group mention, or a link with its own
@@ -48,11 +49,13 @@ runs:
         fi
         # The title is the pull request author's text, and Slack reads <...>
         # as a mention or a link, so it is made plain before it goes in (#62).
-        # It is cut before escaping, so an escape is never cut in half.
+        # Bidirectional controls are removed, so the title cannot reorder the
+        # text around it (#75). It is cut before escaping, so an escape is
+        # never cut in half.
         # split and join replace {title} in one pass: a title holding
         # {title} is not expanded again.
         PAYLOAD=$(jq -n --arg msg "$INPUT_MESSAGE" --arg title "$INPUT_TITLE" '
-          ($title | gsub("[[:cntrl:]]"; " ")) as $t
+          ($title | gsub("[[:cntrl:]]"; " ") | gsub("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]"; "")) as $t
           | (if ($t | length) > 200 then $t[:200] + "..." else $t end)
           | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")
           | . as $safe

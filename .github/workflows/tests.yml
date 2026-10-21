@@ -36,8 +36,10 @@ jobs:
         run: python3 scripts/test_safe_path.py
       - name: Claude skip notice (#15)
         run: python3 scripts/test_claude_skip.py
-      - name: Who can start a Claude review by comment (#64)
-        run: python3 scripts/test_claude_trigger.py
+      - name: Claude stack check (#58)
+        run: python3 scripts/test_claude_stack.py
+      - name: Who can start a review by comment (#64)
+        run: python3 scripts/test_comment_trigger.py
       - name: Slack step guard (#59)
         run: python3 scripts/test_slack_guard.py
       - name: Slack webhook off the command line (#66)

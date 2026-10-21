@@ -164,6 +164,10 @@ with tempfile.TemporaryDirectory() as tmp:
     title_case("T16 with no title input and no {title}, the message is sent as is", "", plain,
                message=plain)
     title_case("T17 every {title} is replaced", "a&b", "a&amp;b / a&amp;b", message="{title} / {title}")
+    bidi = "".join(chr(c) for c in (0x61C, 0x200E, 0x200F, *range(0x202A, 0x202F), *range(0x2066, 0x206A)))
+    title_case("T18 bidirectional control characters are removed", f"a{bidi}b\u202e<x>", "PR #1: ab&lt;x&gt;")
+    title_case("T19 neighbouring characters stay: zero width joiner and U+2065 pass", "a\u200db\u2065c",
+               "PR #1: a\u200db\u2065c")
 
 server.shutdown()
 print(f"\n{passed} passed, {failed} failed")
