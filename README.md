@@ -226,7 +226,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 ## Versioning
 
 - `@v1` moves to the latest 1.x release. You get prompt updates and fixes on your next pull request. Breaking changes go to `v2`.
-- `@v1.6.14`, or a commit SHA, fixes the workflow, prompts and scripts to that release. `gemini-review-vertex.yml` signs in at `@v1` and at the commit SHA of a release your Google Cloud setup lists, not at a version tag such as `@v1.6.14`. A Vertex caller at `@v1` stops signing in when `v1` moves, until the setup script lists the new commit, so pin it by SHA (see Gemini through Vertex AI).
+- `@v1.6.14`, or a commit SHA, fixes the workflow, prompts and scripts to that release. `gemini-review-vertex.yml` signs in at `@v1` and at the commit SHA of a release your Google Cloud setup lists, not at a version tag such as `@v1.6.14`. A Vertex caller at `@v1` stops signing in when `v1` moves, until the setup script lists the new tag object, so pin it by SHA (see Gemini through Vertex AI).
 - `@main` is for testing this repo only.
 
 Releases are tags; [the tag list](https://github.com/jadedm/pr-review-workflows/tags) is the changelog.

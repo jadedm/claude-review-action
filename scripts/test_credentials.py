@@ -70,6 +70,12 @@ versioning = README.split("## Versioning", 1)[1].split("\n## ", 1)[0]
 check("D1 Versioning says Vertex signs in at @v1 and at a listed release commit, not at a version tag",
       "gemini-review-vertex.yml" in versioning and "commit SHA" in versioning and "pin it by SHA" in versioning, versioning)
 
+vertex = README.split("Gemini through Vertex AI", 1)[1].split("\n## ", 1)[0]
+check("D1 the Vertex setup says @v1 reports the tag object and a pinned caller the commit, and lists both",
+      "for `@v1`, an annotated tag, the tag object\x27s; for a caller pinned by commit, the commit\x27s. List both." in vertex, vertex[:300])
+check("D1 no Vertex text says a moved v1 signs in once the new commit is listed",
+      "lists the new commit" not in README, [l for l in README.splitlines() if "lists the new commit" in l])
+
 releases = CONTRIBUTING.split("## Releases", 1)[1].split("\n## ", 1)[0]
 order = [releases.find(s) for s in ("git rev-parse v1", "current tag object and commit and the new ones", "Push the tag", "new tag object and commit only")]
 check("R1 CONTRIBUTING gives the release order: create v1 locally, list old and new, push, drop the old",
