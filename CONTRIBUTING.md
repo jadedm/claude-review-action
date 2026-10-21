@@ -27,3 +27,9 @@ Conventional commit messages (`fix(gemini): ...`, `docs: ...`). The body says wh
 ## Releases
 
 Maintainers tag releases as `v1.x.y` and move the `v1` tag to the same commit. A change that breaks callers (a removed input, a different output format) goes to a new major version instead.
+
+Each Google Cloud project that runs `gemini-review-vertex.yml` admits only listed release commits, so moving `v1` takes three steps there:
+
+1. Rerun `scripts/setup_vertex_wif.sh --apply` with `--release-sha` for the current and the new commit.
+2. Move `v1`.
+3. Rerun it with the new commit only. Until this step the old commit can still sign in.

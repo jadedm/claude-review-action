@@ -2,7 +2,7 @@
 # Let gemini-review-vertex.yml sign in to Google Cloud with no stored key (#55).
 #
 #   scripts/setup_vertex_wif.sh --project PROJECT_ID --repos OWNER/REPO[,OWNER/REPO...] \
-#     [--allow-ref REF]... [--apply]
+#     --release-sha SHA [--release-sha SHA]... [--allow-ref REF]... [--apply]
 #
 # Creates, or brings up to date: a workload identity pool and an OIDC provider
 # for GitHub Actions in PROJECT_ID; a custom role holding only
@@ -10,12 +10,17 @@
 # and, for each listed repository, permission for that repository's workflow
 # runs to act as the service account.
 #
-# The provider admits a GitHub token only when both hold:
-#   - the job runs gemini-review-vertex.yml from jadedm/pr-review-workflows at
-#     the v1 tag exactly, or at one of the --allow-ref refs, given in full such
-#     as refs/heads/my-branch, for testing (remove those afterwards). Older
-#     tags are not admitted, so a caller cannot pin back to a release that a
-#     later one fixed;
+# The provider admits a GitHub token only when all three hold:
+#   - the job runs gemini-review-vertex.yml from jadedm/pr-review-workflows
+#     called as @v1, as @ one of the --release-sha commits, or at one of the
+#     --allow-ref refs, given in full such as refs/heads/my-branch, for testing
+#     (remove those afterwards). Older tags are not admitted, so a caller
+#     cannot pin back to a release that a later one fixed;
+#   - the workflow file came from one of the --release-sha commits (the
+#     token's job_workflow_sha). A tag is a name that can be moved; this ties
+#     the token to commits that were reviewed (#66). When v1 moves, rerun with
+#     the old and the new commit, move the tag, then rerun with the new one
+#     only (CONTRIBUTING.md, Releases);
 #   - the calling repository's numeric id is one of the listed repositories'
 #     (ids, not names, because a deleted repository's name can be taken again).
 # So another workflow in a listed repository cannot get a token.
@@ -27,18 +32,22 @@
 # CLOUDSDK_CONFIG for another profile) and gh to look up repository ids.
 set -euo pipefail
 
-usage() { echo "usage: $0 --project PROJECT_ID --repos OWNER/REPO[,...] [--allow-ref REF]... [--apply]" >&2; exit 2; }
-project="" repos="" apply=0 refs=()
+usage() { echo "usage: $0 --project PROJECT_ID --repos OWNER/REPO[,...] --release-sha SHA [--release-sha SHA]... [--allow-ref REF]... [--apply]" >&2; exit 2; }
+project="" repos="" apply=0 refs=() shas=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) [ $# -ge 2 ] || usage; project=$2; shift 2 ;;
     --repos) [ $# -ge 2 ] || usage; repos=$2; shift 2 ;;
+    --release-sha) [ $# -ge 2 ] || usage; shas+=("$2"); shift 2 ;;
     --allow-ref) [ $# -ge 2 ] || usage; refs+=("$2"); shift 2 ;;
     --apply) apply=1; shift ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
 done
-[ -n "$project" ] && [ -n "$repos" ] || usage
+[ -n "$project" ] && [ -n "$repos" ] && [ ${#shas[@]} -gt 0 ] || usage
+for sha in "${shas[@]}"; do
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "--release-sha must be a full 40-character lower-case commit SHA, got '${sha}'" >&2; exit 2; }
+done
 for ref in ${refs[@]+"${refs[@]}"}; do
   [[ "$ref" =~ ^refs/(heads|tags)/[A-Za-z0-9._/-]+$ ]] || { echo "--allow-ref must be a full ref such as refs/heads/main, got '${ref}'" >&2; exit 2; }
 done
@@ -67,12 +76,13 @@ done
 
 # The attribute condition, in CEL.
 refs_cel="assertion.job_workflow_ref == \"${workflow}@refs/tags/v1\""
-for ref in ${refs[@]+"${refs[@]}"}; do
+for ref in "${shas[@]}" ${refs[@]+"${refs[@]}"}; do
   refs_cel="${refs_cel} || assertion.job_workflow_ref == \"${workflow}@${ref}\""
 done
+shas_cel=$(printf '"%s", ' "${shas[@]}")
 ids_cel=$(printf '"%s", ' "${ids[@]}")
-condition="(${refs_cel}) && assertion.repository_id in [${ids_cel%, }]"
-mapping="google.subject=assertion.sub,attribute.repository_id=assertion.repository_id,attribute.job_workflow_ref=assertion.job_workflow_ref"
+condition="(${refs_cel}) && assertion.job_workflow_sha in [${shas_cel%, }] && assertion.repository_id in [${ids_cel%, }]"
+mapping="google.subject=assertion.sub,attribute.repository_id=assertion.repository_id,attribute.job_workflow_ref=assertion.job_workflow_ref,attribute.job_workflow_sha=assertion.job_workflow_sha"
 
 state() {
   local pool_state provider_cond bindings
