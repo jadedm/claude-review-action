@@ -22,7 +22,17 @@ runs:
           echo "::warning::SLACK_WEBHOOK_URL is empty — skipping notification"
           exit 0
         fi
+        # The URL is the secret, so it reaches curl as a config line on stdin
+        # rather than as an argument (#66). Arguments show in any user's
+        # process list; the environment below is readable only by this user,
+        # which every step of the job already is. A quote, backslash, whitespace or control character
+        # would break out of the config's quoted string, so such a URL is
+        # refused.
+        if [[ "$SLACK_WEBHOOK_URL" =~ [\"\\[:space:][:cntrl:]] ]]; then
+          echo "::warning::SLACK_WEBHOOK_URL holds a quote, backslash or whitespace — skipping notification"
+          exit 0
+        fi
         PAYLOAD=$(jq -n --arg text "$INPUT_MESSAGE" '{text: $text}')
-        curl -sf -X POST "$SLACK_WEBHOOK_URL" \
+        printf 'url = "%s"\n' "$SLACK_WEBHOOK_URL" | curl -sf -K - -X POST \
           -H 'Content-Type: application/json' \
           -d "$PAYLOAD"

@@ -34,6 +34,12 @@ jobs:
         run: python3 scripts/test_claude_skip.py
       - name: Slack step guard (#59)
         run: python3 scripts/test_slack_guard.py
+      - name: Slack webhook off the command line (#66)
+        run: python3 scripts/test_slack_notify.py
+      - name: Vertex setup admits release commits only (#66)
+        run: python3 scripts/test_setup_vertex_wif.py
+      - name: Claude runs on the job's token (#66)
+        run: python3 scripts/test_credentials.py
       - name: Rules from the base branch (#37)
         run: python3 scripts/test_base_file.py
       - name: Repo protection script (sandbox#60)

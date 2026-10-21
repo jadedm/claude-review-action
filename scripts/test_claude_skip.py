@@ -89,8 +89,9 @@ def run(files, comments=(), fail=False, pages=1):
 
 print("skip notice")
 p, posted, output = run([".github/workflows/claude.yml", "src/a.py"])
-check("15.1 skipped, PR edits a workflow: one comment naming the cause, a warning, reviewed=false",
-      p.returncode == 0 and len(posted) == 1 and MARKER in posted[0] and ".github/workflows/" in posted[0]
+check("15.1 skipped, PR edits a workflow: one comment pointing at the log, no workflow sentence (#66), a warning, reviewed=false",
+      p.returncode == 0 and len(posted) == 1 and MARKER in posted[0] and "this run's log says why" in posted[0]
+      and ".github/workflows/" not in posted[0] and "default branch" not in posted[0]
       and "::warning::Claude did not review" in p.stdout and "reviewed=false" in output, (p.stdout, p.stderr, posted))
 p, posted, output = run(["src/a.py"])
 check("15.2 skipped, no workflow edit: one comment pointing at the log",
@@ -108,8 +109,8 @@ p, posted, output = run([".github/workflows/claude.yml"], comments=[("pr-author"
 check("15.6 a marker posted by anyone but the workflow does not silence the notice", len(posted) == 1, (p.stdout, posted))
 p, posted, output = run(["a.py", "b.py", ".github/workflows/claude.yml", "c.py"], pages=3,
                         comments=[("x", "a"), ("github-actions[bot]", MARKER), ("y", "b")])
-check("15.8 counts are summed across pages: a workflow file on page 2 and the marker on page 2 are both seen",
-      posted == [] and "changes a file under" in p.stdout, (p.stdout, posted))
+check("15.8 counts are summed across pages: the marker on page 2 is seen",
+      posted == [] and "not posting again" in p.stdout, (p.stdout, posted))
 
 def step(path, name):
     text = path.read_text().splitlines()
@@ -185,18 +186,15 @@ check("50.9 no gh and no dnf or apt-get: step red and says why", p.returncode !=
 
 import re
 filters = re.findall(r"--jq (\"[^\n]*\"|'[^\n]*')", SCRIPT)
-if shutil.which("jq") and len(filters) == 2:
+if shutil.which("jq") and len(filters) == 1:
     marker_filter = filters[0][1:-1].replace('\\"', '"').replace("$marker", MARKER)
-    files_filter = filters[1][1:-1]
     def jq(f, data):
         return subprocess.run(["jq", f], input=json.dumps(data), capture_output=True, text=True).stdout.strip()
     check("15.7 the real comment filter counts marker comments",
           jq(marker_filter, [{"body": "x", "user": {"login": "github-actions[bot]"}}, {"body": MARKER + " old", "user": {"login": "github-actions[bot]"}},
                              {"body": MARKER, "user": {"login": "someone"}}]) == "1", marker_filter)
-    check("15.7 the real files filter counts workflow files only",
-          jq(files_filter, [{"filename": ".github/workflows/a.yml"}, {"filename": "src/.github/workflows/b.yml"}, {"filename": "a.py"}]) == "1", files_filter)
 else:
-    check("15.7 jq available and both filters found", False, (shutil.which("jq"), filters))
+    check("15.7 jq available and the comment filter found", False, (shutil.which("jq"), filters))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
