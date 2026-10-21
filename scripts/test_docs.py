@@ -139,15 +139,15 @@ check("R2 the quickstart lists every stack prompt and no others", [s for s in li
 print("line references")
 # The exact citation in the README, the file, the lines, and text that must be on them.
 CITES = [
-    ("`claude-review.yml:165`", "claude-review.yml", 165, 165, "scripts/base_file.py"),
+    ("`claude-review.yml:168`", "claude-review.yml", 168, 168, "scripts/base_file.py"),
     ("`gemini-review.yml:341`", "gemini-review.yml", 341, 341, "scripts/base_file.py"),
     ("`claude-review.yml:84`", "claude-review.yml", 84, 84, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
     ("`:100`", "claude-review.yml", 100, 100, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
-    ("`:199`", "claude-review.yml", 199, 199, "anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9"),
+    ("`:202`", "claude-review.yml", 202, 202, "anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9"),
     ("lines 32 to 66", "../../scripts/gemini_review_comment.py", 32, 66, 'text.replace("@", "@" + ZWSP)'),
     ("`gemini_review_comment.py:91-127`", "../../scripts/gemini_review_comment.py", 91, 127, '"### Not reviewed"'),
-    ("`claude-review.yml:282`", "claude-review.yml", 282, 282, "Say when Claude did not review"),
-    ("`claude-review.yml:246-248`", "claude-review.yml", 246, 248, "--disallowedTools \"Edit,MultiEdit,Write"),
+    ("`claude-review.yml:285`", "claude-review.yml", 285, 285, "Say when Claude did not review"),
+    ("`claude-review.yml:249-251`", "claude-review.yml", 249, 251, "--disallowedTools \"Edit,MultiEdit,Write"),
     ("`claude-review.yml:49-58`", "claude-review.yml", 49, 58, '["OWNER","MEMBER","COLLABORATOR"]'),
     ("`gemini-review.yml:90-99`", "gemini-review.yml", 90, 99, '["OWNER","MEMBER","COLLABORATOR"]'),
 ]

@@ -109,8 +109,9 @@ try:
           0 <= at["base"] < at["stack"] < at["notes"] < at["tail"], at)
     (root / "prompts/_claude-tail.md").unlink()
     r, prompt = compose()
-    check("11. with the tail missing, the step fails and names it",
-          r.returncode != 0 and "Claude prompt tail not found" in r.stdout and "PROMPT<<" not in prompt, (r.returncode, r.stdout[-200:]))
+    check("11. with the tail missing (a ref from before it), the step warns and composes the prompt without it",
+          r.returncode == 0 and "::warning::Claude prompt tail not found" in r.stdout and prompt.startswith("PROMPT<<")
+          and BASE.splitlines()[0] in prompt and TOOL not in prompt, (r.returncode, r.stdout[-200:]))
 finally:
     shutil.rmtree(work)
 

@@ -193,7 +193,7 @@ for wf, mention in WORKFLOWS:
     check(f"{wf}: 64.1 a pull_request event runs, public or private, input on or off",
           all(runs(name="pull_request", action=a, private=p, require=r)
               for a in ("opened", "synchronize") for p in (False, True) for r in (False, True)))
-    check(f"{wf}: 64.2 public repo, new @claude comment by a MEMBER: runs", runs())
+    check(f"{wf}: 64.2 public repo, new {mention} comment by a MEMBER: runs", runs())
     check(f"{wf}: 64.3 public repo, association NONE: refused", not runs(role="NONE"))
     check(f"{wf}: 64.4 public repo, association CONTRIBUTOR: refused", not runs(role="CONTRIBUTOR"))
     check(f"{wf}: 64.5 private repo, input left at its default, association NONE: runs as before", runs(private=True, role="NONE"))

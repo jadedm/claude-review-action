@@ -134,8 +134,11 @@ jobs:
           if [ ! -f "$BASE" ]; then
             echo "::error::base prompt not found at $BASE"; exit 1
           fi
+          # A ref from before the tail existed keeps working: its base.md
+          # carries that release's own output instructions.
           if [ ! -f "$TAIL" ]; then
-            echo "::error::Claude prompt tail not found at $TAIL"; exit 1
+            echo "::warning::Claude prompt tail not found at $TAIL; reviewing without it"
+            TAIL=/dev/null
           fi
           if [ ! -f "$STACK_FILE" ]; then
             echo "::error::stack prompt '${STACK}' not found at $STACK_FILE"; exit 1
