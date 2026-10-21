@@ -14,7 +14,8 @@
 #   - the job runs gemini-review-vertex.yml from jadedm/pr-review-workflows
 #     called as @v1, as @ one of the --release-sha commits, or at one of the
 #     --allow-ref refs, given in full such as refs/heads/my-branch, for testing
-#     (remove those afterwards). Older tags are not admitted, so a caller
+#     (remove those afterwards; a branch also needs its head commit passed as
+#     --release-sha, since the next rule applies to it too). Older tags are not admitted, so a caller
 #     cannot pin back to a release that a later one fixed;
 #   - the workflow file came from one of the --release-sha commits (the
 #     token's job_workflow_sha). A tag is a name that can be moved; this ties

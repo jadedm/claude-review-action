@@ -201,9 +201,9 @@ jobs:
           # runner's workflow command and credential files in its temp folder
           # (the rest of it holds CI logs the reviewer may read), the runner's
           # own registration files and logs, and .git folders under the working
-          # directory, which includes the prompts checkout (the action's token
-          # is in the origin URL). Claude Code applies Read rules to Grep and Glob
-          # on a best-effort basis. The prompts checkout keeps no token on disk.
+          # directory (the consumer checkout's holds the job token in its git
+          # config). Claude Code applies Read rules to Grep and Glob on a
+          # best-effort basis. The prompts checkout keeps no token on disk.
           #
           # The action also runs Claude with acceptEdits, which approves some
           # shell file commands without a rule naming them. A reviewer needs

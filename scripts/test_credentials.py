@@ -68,7 +68,7 @@ check("D3 the README says who posts Claude's comments", "github-actions[bot]" in
 check("D1 the README's Vertex setup passes --release-sha", "--release-sha FULL_SHA --apply" in README)
 versioning = README.split("## Versioning", 1)[1].split("\n## ", 1)[0]
 check("D1 Versioning says Vertex signs in at @v1 and at a listed release commit, not at a version tag",
-      "gemini-review-vertex.yml" in versioning and "commit SHA" in versioning and "rerun" in versioning, versioning)
+      "gemini-review-vertex.yml" in versioning and "commit SHA" in versioning and "pin it by SHA" in versioning, versioning)
 
 releases = CONTRIBUTING.split("## Releases", 1)[1].split("\n## ", 1)[0]
 order = [releases.find(s) for s in ("current and the new commit", "Move `v1`", "new commit only")]

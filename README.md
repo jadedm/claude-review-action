@@ -136,13 +136,15 @@ AI Studio stops calls when a billing account reaches its [tier's monthly spend c
          contents: read
          pull-requests: write
          id-token: write
-       uses: jadedm/pr-review-workflows/.github/workflows/gemini-review-vertex.yml@v1
+       uses: jadedm/pr-review-workflows/.github/workflows/gemini-review-vertex.yml@FULL_SHA # v1.x.y
        with:
          stack: python
          vertex_project: YOUR_PROJECT_ID
          workload_identity_provider: projects/NUMBER/locations/global/workloadIdentityPools/github-pr-review/providers/github
          service_account: pr-review-vertex@YOUR_PROJECT_ID.iam.gserviceaccount.com
    ```
+
+Pin the call to the commit you passed as `--release-sha`. A caller at `@v1` also signs in, but stops signing in when `v1` moves to a commit your setup does not list. To upgrade: rerun the setup script with the old and the new commit, change the pin, then rerun it with the new commit only.
 
 A `pull_request` run from a fork gets no OIDC token, so the review fails on it, as it does without secrets. An `@gemini` comment on a fork's pull request runs in your repository and does get one; nothing in the job runs the fork's files, but read the pull request before asking. The workflow has no `ref` input: its scripts always come from its own commit, because any step in a job holding `id-token: write` can ask for a token. For the same reason, on a self-hosted runner use ephemeral runners: a persistent machine can carry a tool left behind by an earlier job into this one.
 
@@ -224,7 +226,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 ## Versioning
 
 - `@v1` moves to the latest 1.x release. You get prompt updates and fixes on your next pull request. Breaking changes go to `v2`.
-- `@v1.6.14`, or a commit SHA, fixes the workflow, prompts and scripts to that release. `gemini-review-vertex.yml` signs in at `@v1` and at the commit SHA of a release your Google Cloud setup lists, not at a version tag such as `@v1.6.14`. When `v1` moves, Vertex callers sign in again once the setup script has been rerun with the new commit; until then the old commit stays admitted.
+- `@v1.6.14`, or a commit SHA, fixes the workflow, prompts and scripts to that release. `gemini-review-vertex.yml` signs in at `@v1` and at the commit SHA of a release your Google Cloud setup lists, not at a version tag such as `@v1.6.14`. A Vertex caller at `@v1` stops signing in when `v1` moves, until the setup script lists the new commit, so pin it by SHA (see Gemini through Vertex AI).
 - `@main` is for testing this repo only.
 
 Releases are tags; [the tag list](https://github.com/jadedm/pr-review-workflows/tags) is the changelog.
