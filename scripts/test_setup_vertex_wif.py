@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Cases for setup_vertex_wif.sh's arguments and condition (#66). Run: python3 scripts/test_setup_vertex_wif.py
+"""Cases for setup_vertex_wif.sh's arguments and condition (#66) and its grant check (#65).
+Run: python3 scripts/test_setup_vertex_wif.py
 
 Runs the script with stub gcloud and gh first on PATH. The stubs log every
 call and answer as a project with nothing set up yet, so a dry run shows the
-condition the script would set. Standard library only.
+condition the script would set. For the grant cases (G), gcloud answers the
+role list, role permissions, service account list and both IAM policies from
+files in STUB_FIX (role_stage defaults to GA), fails a read when NAME.fail
+exists there, and applies remove-iam-policy-binding and roles update to those
+files. Standard library only.
 """
 import os
 import pathlib
@@ -29,12 +34,43 @@ def check(label, ok, detail=""):
         print(f"  FAIL  {label}: {str(detail)[:600]}")
 
 
-STUB_GCLOUD = """#!/usr/bin/env bash
+STUB_GCLOUD = r"""#!/usr/bin/env bash
 echo "gcloud $*" >> "$STUB_LOG"
+fix=${STUB_FIX:-/nonexistent}
+f=""
 case "$*" in
-  "projects describe"*) echo 281419067788 ;;
-  *" describe "*|*"get-iam-policy"*) exit 1 ;;
+  "projects describe"*) echo 281419067788; exit 0 ;;
+  "iam roles list"*) f=roles_list ;;
+  "iam roles describe"*"value(stage)"*) [ -e "$fix/role_stage" ] && cat "$fix/role_stage" || echo GA; exit 0 ;;
+  "iam roles describe"*) f=role_perms ;;
+  "iam service-accounts list"*) f=sa_list ;;
+  "projects get-iam-policy"*) f=project_policy ;;
+  "iam service-accounts get-iam-policy"*) f=sa_policy ;;
+  "projects remove-iam-policy-binding"*) f=project_policy; op=remove ;;
+  "iam service-accounts remove-iam-policy-binding"*) f=sa_policy; op=remove ;;
+  "iam roles update"*"--add-permissions"*)
+    [ -e "$fix/role_perms" ] || exit 0
+    echo GA > "$fix/role_stage"
+    grep -q aiplatform.endpoints.predict "$fix/role_perms" && exit 0
+    perms=$(cat "$fix/role_perms")
+    echo "${perms:+$perms;}aiplatform.endpoints.predict" > "$fix/role_perms"
+    exit 0 ;;
+  "iam roles update"*) echo aiplatform.endpoints.predict > "$fix/role_perms"; echo GA > "$fix/role_stage"; exit 0 ;;
+  *" describe "*) exit 1 ;;
 esac
+if [ "${op:-}" = remove ]; then
+  while [ $# -gt 0 ]; do
+    case "$1" in --member) m=$2 ;; --role) r=$2 ;; esac
+    shift
+  done
+  grep -vxF "${r},${m}" "$fix/$f" > "$fix/$f.new" || true
+  mv "$fix/$f.new" "$fix/$f"
+  exit 0
+fi
+[ -n "$f" ] || exit 0
+[ -e "$fix/$f.fail" ] && { echo "ERROR: (gcloud) stub refused $f" >&2; exit 1; }
+[ -e "$fix/$f" ] && { cat "$fix/$f"; exit 0; }
+case "$f" in *policy) exit 1 ;; esac
 exit 0
 """
 STUB_GH = """#!/usr/bin/env bash
@@ -55,9 +91,11 @@ with tempfile.TemporaryDirectory() as tmp:
         f.chmod(0o755)
     log = pathlib.Path(tmp, "calls.log")
 
-    def run(*args):
+    def run(*args, fix=None):
         log.write_text("")
         env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "STUB_LOG": str(log)}
+        if fix:
+            env["STUB_FIX"] = str(fix)
         r = subprocess.run(["bash", str(SCRIPT), *args], env=env, capture_output=True, text=True, timeout=60)
         return r.returncode, r.stdout + r.stderr, log.read_text()
 
@@ -104,6 +142,130 @@ with tempfile.TemporaryDirectory() as tmp:
     check("V1 --apply sets the same condition and maps job_workflow_sha",
           code == 0 and f"--attribute-condition {expect}" in update
           and "attribute.job_workflow_sha=assertion.job_workflow_sha" in update, (code, update, out[-400:]))
+
+    # Grant check (#65).
+    SA = "pr-review-vertex@p1.iam.gserviceaccount.com"
+    OUR_ROLE = "projects/p1/roles/prReviewVertexPredict"
+    WIU = "roles/iam.workloadIdentityUser"
+    POOL = "principalSet://iam.googleapis.com/projects/281419067788/locations/global/workloadIdentityPools/github-pr-review"
+    M111, M222 = f"{POOL}/attribute.repository_id/111", f"{POOL}/attribute.repository_id/222"
+    CLEAN = {
+        "roles_list": OUR_ROLE,
+        "role_perms": "aiplatform.endpoints.predict",
+        "sa_list": SA,
+        # Another account's grant of our role, and someone else's owner grant: not ours, not listed (G12).
+        "project_policy": f"{OUR_ROLE},serviceAccount:{SA}\n{OUR_ROLE},serviceAccount:other@p1.iam.gserviceaccount.com\nroles/owner,user:admin@example.com",
+        "sa_policy": f"{WIU},{M111}",
+    }
+    case_no = [0]
+
+    def fixture(**over):
+        case_no[0] += 1
+        d = pathlib.Path(tmp, f"fix{case_no[0]}")
+        d.mkdir()
+        for name, body in {**CLEAN, **over}.items():
+            if body is not None:
+                (d / name).write_text(body + "\n")
+        return d
+
+    def beyond(out):
+        lines = out.splitlines()
+        if "Not as expected:" not in lines:
+            return None
+        i = len(lines) - 1 - lines[::-1].index("Not as expected:")
+        rest = []
+        for line in lines[i + 1:]:
+            if not line.startswith("  "):
+                break
+            rest.append(line.strip())
+        return rest
+
+    removes = ("remove-iam-policy-binding", "roles update")
+    narrowing = ("remove-iam-policy-binding", "--permissions ")
+    sha = ["--release-sha", SHA_A]
+
+    code, out, calls = run(*base, *sha)
+    check("G1 fresh project: nothing beyond the expected set, exit 0", code == 0 and beyond(out) == ["none"], (code, out[-400:]))
+
+    code, out, calls = run(*base, *sha, fix=fixture())
+    check("G2/G12 only the expected grants (others' grants ignored): none, exit 0",
+          code == 0 and beyond(out) == ["none"], (code, out[-600:]))
+
+    EXTRA_PROJECT = f"{CLEAN['project_policy']}\nroles/editor,serviceAccount:{SA}"
+    code, out, calls = run(*base, *sha, fix=fixture(project_policy=EXTRA_PROJECT))
+    check("G3 the service account also holds roles/editor: exit 1, named, no remove call",
+          code == 1 and beyond(out) == [f"{SA} holds roles/editor on project p1"]
+          and not any(w in calls for w in removes), (code, beyond(out), calls))
+
+    code, out, calls = run(*base, *sha, fix=fixture(sa_policy=f"{WIU},{M111}\n{WIU},{M222}"))
+    check("G4 a binding for a repository not in --repos: exit 1, member named",
+          code == 1 and beyond(out) == [f"{M222} has {WIU} on {SA}"], (code, beyond(out)))
+
+    code, out, calls = run(*base, "--repos", "owner/one,owner/two", *sha, fix=fixture(sa_policy=f"{WIU},{M111}\n{WIU},{M222}"))
+    check("G4 the same binding with that repository listed: none, exit 0", code == 0 and beyond(out) == ["none"], (code, beyond(out)))
+
+    TOKEN = "roles/iam.serviceAccountTokenCreator,user:someone@example.com"
+    code, out, calls = run(*base, *sha, fix=fixture(sa_policy=f"{WIU},{M111}\n{TOKEN}"))
+    check("G5 another role on the service account's policy: exit 1, role and member named",
+          code == 1 and beyond(out) == [f"user:someone@example.com has roles/iam.serviceAccountTokenCreator on {SA}"], (code, beyond(out)))
+
+    code, out, calls = run(*base, *sha, fix=fixture(role_perms="aiplatform.endpoints.predict;storage.objects.get"))
+    check("G6 the custom role has an extra permission: exit 1, permission named",
+          code == 1 and beyond(out) == ["role prReviewVertexPredict has permission storage.objects.get"], (code, beyond(out)))
+
+    DELETED = f"{WIU},deleted:principalSet://x?uid=1"
+    code, out, calls = run(*base, *sha, fix=fixture(sa_policy=f"{WIU},{M111}\n{DELETED}"))
+    check("G13 a deleted: member is listed", code == 1 and beyond(out) == [f"deleted:principalSet://x?uid=1 has {WIU} on {SA}"], (code, beyond(out)))
+
+    ALL = dict(project_policy=EXTRA_PROJECT, sa_policy=f"{WIU},{M111}\n{WIU},{M222}\n{TOKEN}",
+               role_perms="aiplatform.endpoints.predict;storage.objects.get")
+    code, out, calls = run(*base, *sha, "--prune", fix=fixture(**ALL))
+    check("G7 --prune without --apply: says it would remove, exit 1, no remove or update call",
+          code == 1 and "--prune with --apply would remove these." in out and not any(w in calls for w in removes)
+          and len(beyond(out)) == 4, (code, out[-600:], calls))
+
+    fx = fixture(**ALL)
+    code, out, calls = run(*base, *sha, "--apply", "--prune", fix=fx)
+    rm = [l for l in calls.splitlines() if any(w in l for w in removes)]
+    want = [
+        f"gcloud projects remove-iam-policy-binding p1 --member serviceAccount:{SA} --role roles/editor --all",
+        f"gcloud iam service-accounts remove-iam-policy-binding {SA} --project p1 --member {M222} --role {WIU} --all",
+        f"gcloud iam service-accounts remove-iam-policy-binding {SA} --project p1 --member user:someone@example.com --role roles/iam.serviceAccountTokenCreator --all",
+        "gcloud iam roles update prReviewVertexPredict --project p1 --add-permissions aiplatform.endpoints.predict --stage GA",
+        "gcloud iam roles update prReviewVertexPredict --project p1 --permissions aiplatform.endpoints.predict --stage GA",
+    ]
+    check("G8 --prune --apply: one remove per extra, the role reset, listed repository kept, then none and exit 0",
+          code == 0 and sorted(rm) == sorted(want) and beyond(out) == ["none"]
+          and (fx / "sa_policy").read_text() == f"{WIU},{M111}\n", (code, rm, out[-600:]))
+
+    code, out, calls = run(*base, *sha, "--apply", fix=fixture(**ALL))
+    check("G9 --apply without --prune: bindings added, nothing removed, exit 1 naming the extras",
+          code == 1 and "add-iam-policy-binding" in calls and not any(w in calls for w in narrowing)
+          and len(beyond(out)) == 4 and "Rerun with --prune --apply" in out, (code, out[-600:]))
+
+    code, out, calls = run(*base, *sha, fix=fixture(role_perms="storage.objects.get"))
+    check("G14 the custom role lacks predict: exit 1, names it and the extra",
+          code == 1 and beyond(out) == ["role prReviewVertexPredict has permission storage.objects.get",
+                                        "role prReviewVertexPredict lacks permission aiplatform.endpoints.predict"], (code, beyond(out)))
+
+    code, out, calls = run(*base, *sha, fix=fixture(role_stage="DISABLED"))
+    check("G15 the custom role is disabled: exit 1, names the stage", code == 1
+          and beyond(out) == ["role prReviewVertexPredict is at stage DISABLED, not GA"], (code, beyond(out)))
+
+    fx = fixture(role_perms="", role_stage="DISABLED")
+    code, out, calls = run(*base, *sha, "--apply", fix=fx)
+    check("G16 --apply without --prune restores predict and GA: then none, exit 0",
+          code == 0 and beyond(out) == ["none"] and (fx / "role_perms").read_text().strip() == "aiplatform.endpoints.predict"
+          and "remove-iam-policy-binding" not in calls, (code, out[-500:], calls))
+
+    for label, name in [("project policy", "project_policy"), ("service account policy", "sa_policy"),
+                        ("role list", "roles_list"), ("service account list", "sa_list")]:
+        fx = fixture()
+        (fx / f"{name}.fail").write_text("")
+        code, out, calls = run(*base, *sha, fix=fx)
+        check(f"G10/G11 the {label} cannot be read: exit 3 with the reason, no clean report",
+              code == 3 and "cannot check the service account's grants" in out and "stub refused" in out
+              and beyond(out) is None, (code, out[-400:]))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed or not passed else 0)

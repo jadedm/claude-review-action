@@ -33,4 +33,4 @@ Each Google Cloud project that runs `gemini-review-vertex.yml` admits only liste
 1. Create the new `v1` locally (`git tag -a -f v1 <commit>`) and read the new tag object's SHA with `git rev-parse v1`.
 2. Rerun `scripts/setup_vertex_wif.sh --apply` with `--release-sha` for the current tag object and commit and the new ones.
 3. Push the tag.
-4. Rerun it with the new tag object and commit only. Until this step the old release can still sign in.
+4. Rerun it with the new tag object and commit only. Until this step the old release can still sign in. Then run `scripts/check_vertex_wif.sh --project <id>`; it must exit 0. It reads the live condition and the pushed `v1` and names any SHA or ref that is not admitted. Run it again after any manual edit of the provider.

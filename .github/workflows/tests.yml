@@ -36,8 +36,10 @@ jobs:
         run: python3 scripts/test_slack_guard.py
       - name: Slack webhook off the command line (#66)
         run: python3 scripts/test_slack_notify.py
-      - name: Vertex setup admits release commits only (#66)
+      - name: Vertex setup admits release commits only, checks grants (#66, #65)
         run: python3 scripts/test_setup_vertex_wif.py
+      - name: Vertex release check (#70)
+        run: python3 scripts/test_check_vertex_wif.py
       - name: Claude runs on the job's token (#66)
         run: python3 scripts/test_credentials.py
       - name: Rules from the base branch (#37)
