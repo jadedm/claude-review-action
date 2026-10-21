@@ -274,8 +274,12 @@ jobs:
         # Claude posts as github-actions[bot] too (#66), so login and a fixed
         # marker could not tell this notice from a Claude comment quoting it
         # (#68). The marker carries an HMAC of the repository and pull request
-        # keyed with the OAuth secret, which Claude never sees; it differs per
-        # pull request, so one seen elsewhere does not count here.
+        # keyed with the OAuth secret; it differs per pull request, so one seen
+        # elsewhere does not count here. Claude's process holds that secret, so
+        # this rests on the same rules that keep the token from it: Read is
+        # denied on /proc, and with use_commit_signing the action allows no
+        # shell command, env included (src/modes/tag/index.ts). A new key (a rotated
+        # token) or an empty one means one more notice, never a missing one.
         if: success() && steps.claude-review.outputs.conclusion == ''
         env:
           GH_TOKEN: ${{ github.token }}
