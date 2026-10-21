@@ -124,9 +124,12 @@ for line in ("token_format: access_token", "create_credentials_file: false", "ex
     check(f"B5/B15 sign-in sets {line}", f"          {line}" in auth, text)
 check("B15 sign-in runs only when there is something to send", "        if: steps.files.outputs.count > 0" in auth, text)
 call_at, call = step(LINES, "Call Gemini API")
-checkouts = [i for i, l in enumerate(LINES) if l.startswith("      - name: Checkout")]
-check("B15 sign-in comes after both checkouts and directly before the call", auth_at > 0 and checkouts and max(checkouts) < auth_at and auth_at + len(auth) == call_at,
-      (checkouts, auth_at, call_at))
+explain_at, explain = step(LINES, "Explain a refused sign-in")
+post_at = LINES.index("  post:") if "  post:" in LINES else len(LINES)
+checkouts = [i for i, l in enumerate(LINES[:post_at]) if l.startswith("      - name: Checkout")]
+check("B15 sign-in comes after the gemini job's checkouts, then the cause step (#70), then the call",
+      auth_at > 0 and checkouts and max(checkouts) < auth_at and auth_at + len(auth) == explain_at
+      and explain_at + len(explain) == call_at, (checkouts, auth_at, explain_at, call_at))
 check("B15 the call step's credential is the sign-in step's token, sent as a bearer",
       "          GEMINI_API_KEY: ${{ steps.auth.outputs.access_token }}" in call and "          AUTH_SCHEME: bearer" in call
       and "          PROVIDER: vertex" in call)

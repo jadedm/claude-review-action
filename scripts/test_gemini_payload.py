@@ -3,8 +3,8 @@
 
 Runs the real "Collect changed files" and "Build review payload" steps, cut
 out of gemini-review.yml, in bash against fixture files. `gh` is a stub that
-prints a fixed file list. The steps write fixed /tmp paths, so this restores
-nothing it did not create and must not run beside a real review.
+prints a fixed file list. Each run gets its own run folder (WORK, #61), as the
+workflow gives each job.
 
 Standard library only.
 """
@@ -19,15 +19,16 @@ import tempfile
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent
 WORKFLOW = REPO / ".github/workflows/gemini-review.yml"
-TMP_FILES = ["all-changed-files.txt", "changed-files.txt", "pr-diff.txt", "pr-diff-lines.txt", "pr-diff-sent.txt",
-             "review-omitted.jsonl", "review-coverage.json", "review-prompt.txt", "review-code.txt",
-             "review-diff.txt"]
-CHUNKS = pathlib.Path("/tmp/review-chunks")
+RUN = {}  # the last run's folder: RUN["dir"]
+
+
+def chunks_dir():
+    return RUN["dir"] / "review-chunks"
 
 
 def read_chunks(name):
     """One file from every call's directory, in call order."""
-    dirs = sorted(CHUNKS.iterdir(), key=lambda d: int(d.name)) if CHUNKS.exists() else []
+    dirs = sorted(chunks_dir().iterdir(), key=lambda d: int(d.name)) if chunks_dir().exists() else []
     return [(d / name).read_text(errors="surrogateescape") for d in dirs]
 
 
@@ -71,9 +72,9 @@ BUILD = step_script("Build review payload")
 
 def run_steps(files, changed, diff, env=None, gh_fails=False):
     """Lay out a checkout, run both steps, return (collect, build, coverage, code)."""
-    for name in TMP_FILES:
-        pathlib.Path("/tmp", name).unlink(missing_ok=True)
-    shutil.rmtree(CHUNKS, ignore_errors=True)
+    if RUN.get("dir"):
+        shutil.rmtree(RUN["dir"], ignore_errors=True)
+    RUN["dir"] = run_dir = pathlib.Path(tempfile.mkdtemp())  # kept until the next run, for read_chunks
     work = pathlib.Path(tempfile.mkdtemp())
     bin_dir = work / "_bin"
     bin_dir.mkdir()
@@ -89,17 +90,17 @@ def run_steps(files, changed, diff, env=None, gh_fails=False):
             target.symlink_to(content.to)
             continue
         target.write_bytes(content.encode() if isinstance(content, str) else content)
-    pathlib.Path("/tmp/pr-diff.txt").write_text(diff)
+    (run_dir / "pr-diff.txt").write_text(diff)
     out = work / "_out"
     base_env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GITHUB_OUTPUT=str(out),
-                    GH_TOKEN="x", PR_NUMBER="1", REPO="o/r", RUNNER_TEMP=str(work), **DEFAULTS)
+                    GH_TOKEN="x", PR_NUMBER="1", REPO="o/r", RUNNER_TEMP=str(work), WORK=str(run_dir), **DEFAULTS)
     base_env.update(env or {})
     collect = subprocess.run(["bash", "-e", "-c", COLLECT], cwd=work, env=base_env, capture_output=True, text=True)
     build = None
     coverage = code = None
     if collect.returncode == 0 and "count=0" not in out.read_text():
         build = subprocess.run(["bash", "-e", "-c", BUILD], cwd=work, env=base_env, capture_output=True, text=True)
-        cov_path = pathlib.Path("/tmp/review-coverage.json")
+        cov_path = run_dir / "review-coverage.json"
         coverage = json.loads(cov_path.read_text()) if cov_path.exists() else None
         code = "".join(read_chunks("code.txt"))
     shutil.rmtree(work)
@@ -202,7 +203,7 @@ print("diff byte cap")
 c, b, cov, code = run_steps({"a.py": lines(1)}, ["a.py"], "diff --git a/a.py b/a.py\n+" + "y" * 200, env={"MAX_PAYLOAD_BYTES": "100"})
 check("24 a diff cut inside its last line is recorded as cut", cov.get("diff_cut") is True, cov)
 c, b, cov, code = run_steps({"a.py": lines(1)}, ["a.py"], "+" + "é" * 100, env={"MAX_PAYLOAD_BYTES": "50"})
-sent_diff = b"".join((d / "diff.txt").read_bytes() for d in sorted(CHUNKS.iterdir())) if CHUNKS.exists() else b""
+sent_diff = b"".join((d / "diff.txt").read_bytes() for d in sorted(chunks_dir().iterdir())) if chunks_dir().exists() else b""
 try:
     sent_diff.decode("utf-8")
     valid = True
@@ -280,7 +281,7 @@ check("30.20 rename, space, quote and Unicode hunks go with their own files",
 for bad in ["0", "-1", "1.5", "6", "x"]:
     c, b, cov, code = run_steps({"a.py": lines(1)}, ["a.py"], "", env={"MAX_CHUNKS": bad})
     check(f"30.24 max_chunks {bad!r} fails the step before any call",
-          b.returncode != 0 and "max_chunks must be a whole number" in b.stdout + b.stderr and not CHUNKS.exists(),
+          b.returncode != 0 and "max_chunks must be a whole number" in b.stdout + b.stderr and not chunks_dir().exists(),
           (b.returncode, b.stderr[-200:]))
 
 print("round 1 review fixes (#30)")
@@ -336,8 +337,6 @@ check("30.29 git-quoted, spaced, Unicode, deleted and renamed paths each get the
                                                 ("gone \"x\".py", "-d"), ("new name.py", "+more")])
       and cov["omitted"] == [] and cov["diff_sent"] == cov["diff_total"] > 0, (sorted(pairs), cov, diff[:300]))
 
-for name in TMP_FILES:
-    pathlib.Path("/tmp", name).unlink(missing_ok=True)
-shutil.rmtree(CHUNKS, ignore_errors=True)
+shutil.rmtree(RUN["dir"], ignore_errors=True)
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

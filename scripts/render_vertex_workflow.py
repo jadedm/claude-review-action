@@ -36,6 +36,9 @@ AUTH_STEP = f"""      - name: Sign in to Google Cloud
         # request's tree, or exported to later steps' environment.
         if: steps.files.outputs.count > 0
         id: auth
+        # A refusal goes on to the next step, which names the cause for the
+        # post job and fails the job (#70).
+        continue-on-error: true
         uses: {AUTH_ACTION}
         with:
           workload_identity_provider: ${{{{ inputs.workload_identity_provider }}}}
@@ -46,7 +49,40 @@ AUTH_STEP = f"""      - name: Sign in to Google Cloud
           create_credentials_file: false
           export_environment_variables: false
 
+      - name: Explain a refused sign-in
+        # google-github-actions/auth prints Google's reason to its log only.
+        # This asks once more and keeps a fixed cause code, so the post job
+        # can tell the pull request why, then fails the job either way.
+        if: steps.auth.outcome == 'failure'
+        id: signin-cause
+        env:
+          WORKLOAD_IDENTITY_PROVIDER: ${{{{ inputs.workload_identity_provider }}}}
+        run: |
+          set -euo pipefail
+          cause=$(python3 -I .claude-review-action/scripts/vertex_signin_cause.py classify)
+          echo "cause=${{cause}}" >> "$GITHUB_OUTPUT"
+          echo "::error::Google Cloud refused the sign-in (${{cause}}); the Sign in to Google Cloud step log has Google's reason"
+          exit 1
+
       - name: Call Gemini API
+"""
+
+POST_CAUSE = """      - name: Post the sign-in cause
+        # A fixed line for the cause code the gemini job wrote; nothing from
+        # Google's reply reaches the pull request (#70).
+        if: needs.gemini.outputs.signin_cause != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          CAUSE: ${{ needs.gemini.outputs.signin_cause }}
+        run: |
+          set -euo pipefail
+          message=$(python3 -I .claude-review-action/scripts/vertex_signin_cause.py message "$CAUSE")
+          if [ -z "$message" ]; then exit 0; fi
+          gh pr comment "$PR_NUMBER" --body "$message"
+
+      - name: Notify Slack
 """
 
 # (old text, new text, times the old text must occur)
@@ -84,11 +120,26 @@ CHANGES = [
         type: string
         default: ''
 """, "", 1),
-    ("          ref: ${{ inputs.ref || job.workflow_sha || 'v1' }}\n", "          ref: ${{ job.workflow_sha || 'v1' }}\n", 1),
+    # Twice: the gemini job's checkout and the post job's.
+    ("          ref: ${{ inputs.ref || job.workflow_sha || 'v1' }}\n", "          ref: ${{ job.workflow_sha || 'v1' }}\n", 2),
     ("""          # This workflow's own repository and commit unless the caller names a
           # ref (#25), so a fork's workflow loads the fork's prompts.""",
      """          # This workflow's own repository and commit, always: there is no ref
-          # input here, so a fork's workflow loads the fork's prompts.""", 1),
+          # input here, so a fork's workflow loads the fork's prompts.""", 2),
+    # Only the job that calls the model asks for an OIDC token (#63).
+    ("""    permissions:
+      contents: read
+      pull-requests: read
+""", """    permissions:
+      contents: read
+      pull-requests: read
+      id-token: write
+""", 1),
+    ("""      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+""", """      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      signin_cause: ${{ steps.signin-cause.outputs.cause }}
+""", 1),
+    ("      - name: Notify Slack\n", POST_CAUSE, 1),
     ("""permissions:
   contents: read
   pull-requests: write
@@ -112,7 +163,8 @@ CHANGES = [
     ("          AUTH_SCHEME: key\n", "          AUTH_SCHEME: bearer\n", 1),
     # Its own concurrency group: with gemini-review.yml's, a repo running both
     # had one cancel the other's run on the same pull request (seen live).
-    ("      group: gemini-review-${{", "      group: gemini-review-vertex-${{", 1),
+    # Twice: the gemini job and the post job share one group.
+    ("      group: gemini-review-${{", "      group: gemini-review-vertex-${{", 2),
     ("      - name: Call Gemini API\n", AUTH_STEP, 1),
 ]
 

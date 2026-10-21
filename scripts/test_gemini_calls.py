@@ -4,7 +4,7 @@
 Runs the real "Call Gemini API" step, cut out of gemini-review.yml, against a
 stub `curl` whose reply depends on the file names in the request: fail500,
 timeout, flaky429 (429 once, then a review), unreadable, and slow (3 s).
-The step writes fixed /tmp paths, so this must not run beside a real review.
+Each run gets its own run folder (WORK, #61), as the workflow gives each job.
 
 Standard library only.
 """
@@ -20,8 +20,6 @@ import time
 HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent
 WORKFLOW = REPO / ".github/workflows/gemini-review.yml"
-CHUNKS = pathlib.Path("/tmp/review-chunks")
-TMP = [pathlib.Path("/tmp", n) for n in ("review-prompt.txt", "review-coverage.json", "gemini-review.json")]
 
 passed = failed = 0
 
@@ -112,10 +110,10 @@ VERTEX_URL = "https://aiplatform.googleapis.com/v1/projects/proj-55/locations/gl
 def run_calls(chunk_names, thinking="high", model="m", plant=None, provider="ai_studio", api_url=AI_STUDIO_URL, auth="key"):
     """chunk_names: one list of file names per call. Returns (proc, review, coverage, seconds).
     The request bodies the stub received are in BODIES after the call."""
-    shutil.rmtree(CHUNKS, ignore_errors=True)
-    for p in TMP:
-        p.unlink(missing_ok=True)
     work = pathlib.Path(tempfile.mkdtemp())
+    run_dir = work / "_run"  # the run folder, under RUNNER_TEMP in the workflow
+    run_dir.mkdir()
+    chunks = run_dir / "review-chunks"
     (work / ".claude-review-action").symlink_to(REPO)
     for name in ("json.py", "secrets.py", "sys.py"):
         if plant:
@@ -130,28 +128,28 @@ def run_calls(chunk_names, thinking="high", model="m", plant=None, provider="ai_
     if chunk_names is None:
         chunk_names = []  # the planner made no calls and wrote no chunk directory
     for n, names in enumerate(chunk_names, 1):
-        d = CHUNKS / str(n)
+        d = chunks / str(n)
         d.mkdir(parents=True)
         (d / "code.txt").write_text("".join(f"--- {name} ---\nx = 1\n\n" for name in names))
         (d / "diff.txt").write_text("")
         (d / "files.json").write_text(json.dumps(names))
-    pathlib.Path("/tmp/review-prompt.txt").write_text("Review this.\n")
-    pathlib.Path("/tmp/review-coverage.json").write_text(json.dumps({"omitted": [], "filtered": 0, "diff_sent": 0, "diff_total": 0}))
+    (run_dir / "review-prompt.txt").write_text("Review this.\n")
+    (run_dir / "review-coverage.json").write_text(json.dumps({"omitted": [], "filtered": 0, "diff_sent": 0, "diff_total": 0}))
     env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GEMINI_API_KEY="k-SECRET-55", GEMINI_MODEL=model, STUB_STATE=str(state), RUNNER_TEMP=str(work / "_rt"),
-               THINKING_LEVEL=thinking, PROVIDER=provider, API_URL=api_url, AUTH_SCHEME=auth)
+               THINKING_LEVEL=thinking, PROVIDER=provider, API_URL=api_url, AUTH_SCHEME=auth, WORK=str(run_dir))
     start = time.monotonic()
     proc = subprocess.run(["bash", "-e", "-c", CALL], cwd=work, env=env, capture_output=True, text=True)
     seconds = time.monotonic() - start
-    out = pathlib.Path("/tmp/gemini-review.json")
+    out = run_dir / "gemini-review.json"
     review = json.loads(out.read_text()) if out.exists() else None
-    coverage = json.loads(pathlib.Path("/tmp/review-coverage.json").read_text())
+    coverage = json.loads((run_dir / "review-coverage.json").read_text())
     bodies = state / "bodies.jsonl"
     BODIES[:] = [json.loads(l) for l in bodies.read_text().splitlines()] if bodies.exists() else []
     argv = state / "argv.jsonl"
     ARGV[:] = [json.loads(l) for l in argv.read_text().splitlines()] if argv.exists() else []
     hdr = state / "headers.jsonl"
     HEADERS[:] = [json.loads(l) for l in hdr.read_text().splitlines()] if hdr.exists() else []
-    LEFT[:] = [p.name for p in (work / "_rt").glob("gemini-auth.*")]
+    LEFT[:] = [p.name for d in (work / "_rt", run_dir) for p in d.glob("gemini-auth.*")]
     shutil.rmtree(work)
     return proc, review, coverage, seconds
 
@@ -231,7 +229,7 @@ check("33.8 a reply with no usage says not reported rather than 0",
 proc, review, cov, secs = run_calls([["notjson.py"], ["plain.py"]])
 check("33.8 a 200 that is not JSON: the token line says unreadable, no traceback, and the call still records its status",
       "Tokens: unreadable" in proc.stdout and reasons(cov) == {"notjson.py": "review call failed"} and "Traceback" not in proc.stdout
-      and "Call /tmp/review-chunks/1: failed" in proc.stdout,
+      and "Call 1: failed" in proc.stdout,
       (cov, proc.stdout[-400:]))
 for model in ("gemini-2.5-flash", "gemini-1.5-pro"):
     proc, review, cov, secs = run_calls([["plain.py"]], model=model)
@@ -306,8 +304,5 @@ proc, review, cov, secs = run_calls([["plain.py"]], api_url="")
 check("55.3 no API URL (the check step did not run): fails before any call",
       proc.returncode != 0 and BODIES == [] and "no API URL" in proc.stdout, (proc.returncode, proc.stdout[-200:]))
 
-shutil.rmtree(CHUNKS, ignore_errors=True)
-for p in TMP:
-    p.unlink(missing_ok=True)
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

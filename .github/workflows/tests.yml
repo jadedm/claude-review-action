@@ -28,6 +28,10 @@ jobs:
         run: python3 scripts/test_gemini_provider.py
       - name: Gemini Vertex workflow (#55)
         run: python3 scripts/test_gemini_vertex_workflow.py
+      - name: Gemini call and post jobs, run folder (#63, #61)
+        run: python3 scripts/test_gemini_jobs.py
+      - name: Vertex sign-in cause on the pull request (#70)
+        run: python3 scripts/test_vertex_signin_cause.py
       - name: Safe extras path (#35)
         run: python3 scripts/test_safe_path.py
       - name: Claude skip notice (#15)

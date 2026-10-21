@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Splits a pull request into Gemini review calls (#30).
 
-    python3 gemini_chunks.py <out_dir>
+    python3 gemini_chunks.py <work_dir>
 
-Run from the consumer checkout. Reads the changed-file lists and the diff the
-earlier steps wrote to /tmp, and the caps from the environment (MAX_FILES,
-MAX_TOTAL_LINES, MAX_PER_FILE, MAX_DIFF_LINES, MAX_PAYLOAD_BYTES, MAX_CHUNKS).
-Writes <out_dir>/<n>/code.txt, diff.txt and files.json for each call, and
-/tmp/review-coverage.json listing what no call will see (#29). Prints the
-number of calls.
+Run from the consumer checkout. <work_dir> is the run's own folder (#61).
+Reads the changed-file lists and the diff the earlier steps wrote there
+(changed-files.txt, all-changed-files.txt, pr-diff.txt), and the caps from
+the environment (MAX_FILES, MAX_TOTAL_LINES, MAX_PER_FILE, MAX_DIFF_LINES,
+MAX_PAYLOAD_BYTES, MAX_CHUNKS). Writes <work_dir>/review-chunks/<n>/code.txt,
+diff.txt and files.json for each call, and <work_dir>/review-coverage.json
+listing what no call will see (#29). Prints the number of calls.
 
 Each changed file and its diff hunk travel together. Files are sorted by path
 so neighbours tend to share a call, and each goes into the first call with
@@ -31,10 +32,12 @@ import sys
 from safe_path import readable  # one rule for every read from the checkout (#35)
 
 MAX_CHUNKS_LIMIT = 5
-CHANGED = "/tmp/changed-files.txt"
-ALL_CHANGED = "/tmp/all-changed-files.txt"
-DIFF = "/tmp/pr-diff.txt"
-COVERAGE = "/tmp/review-coverage.json"
+# File names inside the run folder.
+CHANGED = "changed-files.txt"
+ALL_CHANGED = "all-changed-files.txt"
+DIFF = "pr-diff.txt"
+COVERAGE = "review-coverage.json"
+CHUNKS = "review-chunks"
 
 
 def lines_of(data):
@@ -193,10 +196,10 @@ def caps_from_env():
     }
 
 
-def plan(caps):
+def plan(caps, work):
     """(chunks, omitted, diff_total_lines)."""
-    changed = sorted(read_list(CHANGED))
-    hunks = split_hunks(pathlib.Path(DIFF).read_bytes())
+    changed = sorted(read_list(work / CHANGED))
+    hunks = split_hunks((work / DIFF).read_bytes())
     diff_total = sum(len(lines_of(h)) for key, h in hunks.items() if key is None or key in changed)
     chunks, omitted = [Chunk(caps)], []
 
@@ -267,10 +270,11 @@ def plan(caps):
     return [c for c in chunks if c.files or c.diff], omitted, diff_total
 
 
-def main(out_dir):
+def main(work_dir):
+    work = pathlib.Path(work_dir)
     caps = caps_from_env()
-    chunks, omitted, diff_total = plan(caps)
-    out = pathlib.Path(out_dir)
+    chunks, omitted, diff_total = plan(caps, work)
+    out = work / CHUNKS
     for n, chunk in enumerate(chunks, 1):
         d = out / str(n)
         d.mkdir(parents=True, exist_ok=True)
@@ -278,10 +282,10 @@ def main(out_dir):
         (d / "diff.txt").write_bytes(b"".join(chunk.diff))
         (d / "files.json").write_text(json.dumps([f["file"] for f in chunk.files]))
     sent = sum(c.diff_lines for c in chunks)
-    filtered = len(read_list(ALL_CHANGED)) - len(read_list(CHANGED))
+    filtered = len(read_list(work / ALL_CHANGED)) - len(read_list(work / CHANGED))
     coverage = {"omitted": omitted, "filtered": filtered, "diff_sent": sent, "diff_total": diff_total,
                 "diff_cut": any(c.diff_cut for c in chunks) or sent < diff_total}
-    pathlib.Path(COVERAGE).write_text(json.dumps(coverage))
+    (work / COVERAGE).write_text(json.dumps(coverage))
     for n, c in enumerate(chunks, 1):
         print(f"Call {n}: {len(c.files)} files, {c.lines} lines, {c.bytes} bytes, diff {c.diff_lines} lines",
               file=sys.stderr)

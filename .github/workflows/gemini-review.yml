@@ -93,6 +93,14 @@ jobs:
       (github.event.repository.private ||
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)))
     runs-on: ${{ fromJSON(inputs.runner) }}
+    # This job reads the pull request and calls the model, and cannot write
+    # to the pull request. The post job below writes and holds no model
+    # credential, so no single step holds both (#63).
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
     concurrency:
       group: gemini-review-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: true
@@ -148,6 +156,16 @@ jobs:
             echo "::error::vertex_location must be global or a region such as us-central1, got '${VERTEX_LOCATION}'"; exit 1
           fi
           echo "api_url=https://${host}/v1/projects/${VERTEX_PROJECT}/locations/${VERTEX_LOCATION}/publishers/google/models/${GEMINI_MODEL}:generateContent" >> "$GITHUB_OUTPUT"
+
+      - name: Make the run folder
+        # Every file this job writes goes in a folder made for this run, not a
+        # fixed /tmp path that another job on the same machine could share (#61).
+        id: work
+        run: |
+          set -euo pipefail
+          dir=$(mktemp -d "${RUNNER_TEMP:?}/gemini-review.XXXXXX")
+          echo "dir=${dir}" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
 
       - name: Checkout consumer repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -217,26 +235,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           REPO: ${{ github.repository }}
+          WORK: ${{ steps.work.outputs.dir }}
         run: |
           set -euo pipefail
+          : "${WORK:?no run folder}"
           # GitHub refuses the whole-PR diff past 300 files or 20,000 lines
           # (HTTP 406 "diff exceeded the maximum number of files"), which
           # failed the review outright on large PRs. Fall back to the
           # per-file patches of the paginated files API, which has no such
           # cap. Only the first max_diff_lines lines are sent to the model
           # either way.
-          if ! gh pr diff "$PR_NUMBER" > /tmp/pr-diff.txt 2> /tmp/pr-diff.err; then
-            if grep -qiE '406|too_large|exceeded the maximum' /tmp/pr-diff.err; then
+          if ! gh pr diff "$PR_NUMBER" > "$WORK/pr-diff.txt" 2> "$WORK/pr-diff.err"; then
+            if grep -qiE '406|too_large|exceeded the maximum' "$WORK/pr-diff.err"; then
               echo "::notice::PR diff too large for the diff API; using per-file patches"
               gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
                 --jq '.[] | "diff --git a/\(.filename) b/\(.filename)\n\(.patch // "(patch omitted by GitHub: file too large)")"' \
-                > /tmp/pr-diff.txt
+                > "$WORK/pr-diff.txt"
             else
-              cat /tmp/pr-diff.err >&2
+              cat "$WORK/pr-diff.err" >&2
               exit 1
             fi
           fi
-          echo "lines=$(wc -l < /tmp/pr-diff.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+          echo "lines=$(wc -l < "$WORK/pr-diff.txt" | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Collect changed files
         id: files
@@ -244,6 +264,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           REPO: ${{ github.repository }}
+          WORK: ${{ steps.work.outputs.dir }}
         run: |
           # Resolve the file list via the GitHub API rather than
           # `git diff origin/<base>...HEAD`. The git-diff approach breaks on
@@ -255,14 +276,15 @@ jobs:
           # `gh pr view --json files` stopped at the first 100 files, so a
           # large PR silently lost the rest.
           set -euo pipefail
-          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' > /tmp/all-changed-files.txt
+          : "${WORK:?no run folder}"
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[].filename' > "$WORK/all-changed-files.txt"
           # grep exits 1 when it keeps nothing (a lockfile-only PR); that is
           # a valid empty list, not a failure. The API call above is not
           # covered by this, so an API error still fails the step.
-          { grep -v -E '\.(lock|min\.(js|css)|map|snap|png|jpg|jpeg|gif|svg|ico|woff|ttf|eot)$' /tmp/all-changed-files.txt || [ $? -eq 1 ]; } \
+          { grep -v -E '\.(lock|min\.(js|css)|map|snap|png|jpg|jpeg|gif|svg|ico|woff|ttf|eot)$' "$WORK/all-changed-files.txt" || [ $? -eq 1 ]; } \
             | { grep -v -E '(package-lock\.json|pnpm-lock\.yaml|yarn\.lock|dist/|node_modules/|coverage/)' || [ $? -eq 1 ]; } \
-            > /tmp/changed-files.txt
-          echo "count=$(wc -l < /tmp/changed-files.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+            > "$WORK/changed-files.txt"
+          echo "count=$(wc -l < "$WORK/changed-files.txt" | tr -d ' ')" >> "$GITHUB_OUTPUT"
 
       - name: Build review payload
         if: steps.files.outputs.count > 0
@@ -284,8 +306,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO_FULL_NAME: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          WORK: ${{ steps.work.outputs.dir }}
         run: |
           set -euo pipefail
+          : "${WORK:?no run folder}"
           ROOT=".claude-review-action"
           BASE="$ROOT/prompts/base.md"
           STACK_FILE="$ROOT/prompts/${STACK}.md"
@@ -300,16 +324,14 @@ jobs:
           # Python rather than bash: it reads files by name without shell
           # parsing, never follows a PR's symlinks, and cuts on whole UTF-8
           # characters. It prints the number of calls.
-          rm -rf /tmp/review-chunks
           # -s -E, not -I: the script imports safe_path.py from its own folder.
-          CALLS=$(python3 -s -E "$ROOT/scripts/gemini_chunks.py" /tmp/review-chunks)
+          CALLS=$(python3 -s -E "$ROOT/scripts/gemini_chunks.py" "$WORK")
           echo "calls=${CALLS}" >> "$GITHUB_OUTPUT"
 
           # The review rules come from the pull request's base commit, never its
           # checkout, so a pull request cannot rewrite the instructions its own
           # review follows; a change to them applies from the next one (#37).
-          EXTRAS_FILE="$RUNNER_TEMP/review-extras.md"
-          rm -f "$EXTRAS_FILE"
+          EXTRAS_FILE="$WORK/review-extras.md"
           if [ -n "$EXTRA_PROMPT_PATH" ]; then
             python3 -I "$ROOT/scripts/base_file.py" "$REPO_FULL_NAME" "$PR_NUMBER" "$EXTRA_PROMPT_PATH" "$EXTRAS_FILE"
           fi
@@ -345,7 +367,7 @@ jobs:
             # workflow" the moment a consumer invoked the reusable.
             echo ""
             cat "$ROOT/prompts/_gemini-tail.md"
-          } > /tmp/review-prompt.txt
+          } > "$WORK/review-prompt.txt"
 
       - name: Call Gemini API
         if: steps.files.outputs.count > 0
@@ -359,9 +381,11 @@ jobs:
           # key sends GEMINI_API_KEY as X-goog-api-key; bearer sends it as an
           # OAuth access token (gemini-review-vertex.yml, #55).
           AUTH_SCHEME: key
+          WORK: ${{ steps.work.outputs.dir }}
         run: |
           set -euo pipefail
-          PROMPT=$(cat /tmp/review-prompt.txt)
+          : "${WORK:?no run folder}"
+          PROMPT=$(cat "$WORK/review-prompt.txt")
           # AUTH_SCHEME below picks the credential header. Vertex wants the turn's
           # role and the level in capitals (#55); AI Studio's request is unchanged.
           SERVICE="Gemini API" ROLE="" LEVEL="$THINKING_LEVEL"
@@ -376,7 +400,7 @@ jobs:
           esac
           # curl reads the header from a private file, so the credential is not
           # on its command line, where other processes on the runner can see it.
-          AUTH_FILE=$(umask 077; mktemp "${RUNNER_TEMP:-/tmp}/gemini-auth.XXXXXX")
+          AUTH_FILE=$(umask 077; mktemp "$WORK/gemini-auth.XXXXXX")
           trap 'rm -f "$AUTH_FILE"' EXIT
           printf '%s\n' "$AUTH_HEADER" > "$AUTH_FILE"
           unset AUTH_HEADER GEMINI_API_KEY  # the scripts below need neither
@@ -474,13 +498,13 @@ jobs:
           # No match (zero planned calls) leaves both loops empty rather than
           # running them once on the literal pattern.
           shopt -s nullglob
-          for dir in /tmp/review-chunks/*/; do
+          for dir in "$WORK"/review-chunks/*/; do
             call_chunk "${dir%/}" > "${dir%/}/log" 2>&1 &
           done
           wait  # each call wrote its own status; a missing status counts as failed
 
-          for dir in /tmp/review-chunks/*/; do
-            echo "::group::Call ${dir%/}: $(cat "${dir}status" 2>/dev/null || echo failed)"
+          for dir in "$WORK"/review-chunks/*/; do
+            echo "::group::Call $(basename "$dir"): $(cat "${dir}status" 2>/dev/null || echo failed)"
             cat "${dir}log"
             echo "::endgroup::"
           done
@@ -488,38 +512,152 @@ jobs:
           # One review from all calls. Exit 1 when every call failed; when
           # none succeeded but one was unreadable, it writes the unreadable
           # marker and the next step posts the fixed notice and fails, as before.
-          python3 -I .claude-review-action/scripts/gemini_review_merge.py /tmp/review-chunks /tmp/gemini-review.json /tmp/review-coverage.json
+          python3 -I .claude-review-action/scripts/gemini_review_merge.py "$WORK/review-chunks" "$WORK/gemini-review.json" "$WORK/review-coverage.json"
+
+      - name: Hand the review to the post job
+        # Only the merged review and the coverage list leave this job. The
+        # post job reads them as untrusted and makes them safe itself.
+        if: steps.files.outputs.count > 0
+        id: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.work.outputs.name }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.work.outputs.dir }}/gemini-review.json
+            ${{ steps.work.outputs.dir }}/review-coverage.json
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Remove the run folder
+        if: always() && steps.work.outputs.dir != ''
+        env:
+          WORK: ${{ steps.work.outputs.dir }}
+        run: rm -rf -- "$WORK"
+
+  post:
+    # Posts what the gemini job found (#63). It can write to the pull
+    # request and holds no model credential. It runs when the gemini job
+    # failed too, so Slack still reports the run; not when that job was
+    # skipped by its trigger filter or cancelled by a newer run.
+    needs: gemini
+    if: always() && needs.gemini.result != 'skipped' && needs.gemini.result != 'cancelled'
+    runs-on: ${{ fromJSON(inputs.runner) }}
+    permissions:
+      contents: read
+      pull-requests: write
+    # The gemini job's group, so a newer run cancels this one too and an
+    # older run cannot post after a newer one.
+    concurrency:
+      group: gemini-review-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+    steps:
+      - name: Clear the action folder
+        # A self-hosted runner can keep the gemini job's workspace, which held
+        # the pull request's tree; remove the link or folder itself before the
+        # action repo is checked out into that path (#59).
+        run: rm -rf -- .claude-review-action
+
+      - name: Checkout review action repo (prompts)
+        id: action-checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # This workflow's own repository and commit unless the caller names a
+          # ref (#25), so a fork's workflow loads the fork's prompts. job.workflow_*
+          # is empty on GitHub Enterprise Server; v1 here is the old default, not
+          # this repo's default branch.
+          repository: ${{ job.workflow_repository || 'jadedm/pr-review-workflows' }}
+          ref: ${{ inputs.ref || job.workflow_sha || 'v1' }}
+          path: .claude-review-action
+          token: ${{ github.token }}
+          # Nothing later needs git credentials in this checkout either (#25 review).
+          persist-credentials: false
+
+      - name: Install GitHub CLI
+        run: |
+          set -euo pipefail
+          if ! command -v gh &> /dev/null; then
+            if command -v dnf &> /dev/null; then
+              sudo dnf install -y 'dnf-command(config-manager)' || true
+              # dnf5 (Fedora 41 and later) renamed --add-repo.
+              sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo \
+                || sudo dnf config-manager addrepo --from-repofile=https://cli.github.com/packages/rpm/gh-cli.repo
+              sudo dnf install -y gh
+            elif command -v apt-get &> /dev/null; then
+              type -p curl >/dev/null || sudo apt-get install -y curl
+              # Downloaded and checked before anything is written: a failed curl
+              # piped into the keyring left it empty, and the apt source added
+              # next then broke apt-get update for every later job on a
+              # self-hosted machine (#50).
+              keyring=$(mktemp)
+              curl -fsSL -o "$keyring" https://cli.github.com/packages/githubcli-archive-keyring.gpg
+              test -s "$keyring"
+              sudo install -m 0644 "$keyring" /usr/share/keyrings/githubcli-archive-keyring.gpg
+              rm -f "$keyring"
+              echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+              sudo apt-get update && sudo apt-get install -y gh
+            fi
+          fi
+          command -v gh > /dev/null || { echo "::error::gh is not installed, and neither dnf nor apt-get is here to install it"; exit 1; }
+
+      - name: Make the run folder
+        id: work
+        run: |
+          set -euo pipefail
+          dir=$(mktemp -d "${RUNNER_TEMP:?}/gemini-post.XXXXXX")
+          echo "dir=${dir}" >> "$GITHUB_OUTPUT"
+
+      - name: Download the review
+        if: needs.gemini.outputs.artifact_id != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.gemini.outputs.artifact_id }}
+          # Into the run folder itself, not a folder named after the artifact.
+          merge-multiple: true
+          path: ${{ steps.work.outputs.dir }}
 
       - name: Post review comment
-        if: steps.files.outputs.count > 0
+        if: needs.gemini.outputs.artifact_id != ''
         id: post-review
         env:
           GH_TOKEN: ${{ github.token }}
+          # No checkout here for gh to read the repository from.
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          WORK: ${{ steps.work.outputs.dir }}
         run: |
           set -euo pipefail
+          : "${WORK:?no run folder}"
+          REVIEW="$WORK/gemini-review.json"
+          COVERAGE="$WORK/review-coverage.json"
+          # Both files come from another job; anything but a plain file is refused.
+          for f in "$REVIEW" "$COVERAGE"; do
+            if [ -L "$f" ] || [ ! -f "$f" ]; then
+              echo "::error::the review from the gemini job has no plain file $(basename "$f")"; exit 1
+            fi
+          done
           # Every field Gemini returns is untrusted: it read the pull request.
           # The builder renders it inert (no mentions, links, images or HTML)
           # and keeps the comment under GitHub's size limit.
-          COMMENT=$(python3 -I .claude-review-action/scripts/gemini_review_comment.py /tmp/gemini-review.json /tmp/review-coverage.json)
-          gh pr comment ${{ github.event.pull_request.number || github.event.issue.number }} --body "$COMMENT"
+          COMMENT=$(python3 -I .claude-review-action/scripts/gemini_review_comment.py "$REVIEW" "$COVERAGE")
+          gh pr comment "$PR_NUMBER" --body "$COMMENT"
 
-          if python3 -I -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('nothing_sent') else 1)"; then
+          if python3 -I -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get('nothing_sent') else 1)" "$REVIEW"; then
             echo "assessment=not_reviewed" >> "$GITHUB_OUTPUT"
             echo "issue_count=n/a" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if python3 -I -c "import json,sys; sys.exit(0 if json.load(open('/tmp/gemini-review.json')).get('unparsed') else 1)"; then
+          if python3 -I -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get('unparsed') else 1)" "$REVIEW"; then
             echo "assessment=unparsed" >> "$GITHUB_OUTPUT"
             echo "issue_count=?" >> "$GITHUB_OUTPUT"
-            echo "::error::Gemini's reply could not be read as a review; see the Call Gemini API step log"
+            echo "::error::Gemini's reply could not be read as a review; see the gemini job's Call Gemini API step log"
             exit 1
           fi
 
           # Only a known verdict reaches the outputs: the model's own text could
           # carry a newline and write extra output lines.
-          echo "assessment=$(python3 -I -c "import json; a=json.load(open('/tmp/gemini-review.json')).get('overall_assessment'); print(a if a in ('approve','comment','request_changes') else 'other')")" >> "$GITHUB_OUTPUT"
-          echo "issue_count=$(python3 -I -c "import json; print(len(json.load(open('/tmp/gemini-review.json')).get('issues', [])))")" >> "$GITHUB_OUTPUT"
+          echo "assessment=$(python3 -I -c "import json,sys; a=json.load(open(sys.argv[1])).get('overall_assessment'); print(a if a in ('approve','comment','request_changes') else 'other')" "$REVIEW")" >> "$GITHUB_OUTPUT"
+          echo "issue_count=$(python3 -I -c "import json,sys; print(len(json.load(open(sys.argv[1])).get('issues', [])))" "$REVIEW")" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
         # always() still reports failed runs, but only once this repo's own
@@ -533,3 +671,9 @@ jobs:
             💎 *Gemini* reviewed PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
             Repo: ${{ github.repository }} | Assessment: ${{ steps.post-review.outputs.assessment || 'error' }} | Issues: ${{ steps.post-review.outputs.issue_count || '?' }}
             <${{ github.event.pull_request.html_url }}|View PR>
+
+      - name: Remove the run folder
+        if: always() && steps.work.outputs.dir != ''
+        env:
+          WORK: ${{ steps.work.outputs.dir }}
+        run: rm -rf -- "$WORK"
