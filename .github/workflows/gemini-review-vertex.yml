@@ -594,10 +594,11 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    # The gemini job's group, so a newer run cancels this one too and an
-    # older run cannot post after a newer one.
+    # Its own group: a newer run's post job cancels this one. Not the gemini
+    # job's group, where an older run's post job queued a moment late would
+    # cancel the newer run's review.
     concurrency:
-      group: gemini-review-vertex-${{ github.event.pull_request.number || github.event.issue.number }}
+      group: gemini-review-vertex-post-${{ github.event.pull_request.number || github.event.issue.number }}
       cancel-in-progress: true
     steps:
       - name: Clear the action folder

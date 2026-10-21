@@ -104,8 +104,9 @@ for name, text in FILES.items():
           "    needs: gemini" in post and post_if == "if: always() && needs.gemini.result != 'skipped' && needs.gemini.result != 'cancelled'",
           post_if)
     groups = [[l.strip() for l in job if l.startswith("      group: ")] for job in (gem, post)]
-    check(f"63.16 {name}: the post job is in the gemini job's concurrency group, cancelled by a newer run",
-          groups[0] and groups[0] == groups[1] and "      cancel-in-progress: true" in post, groups)
+    check(f"63.16 {name}: the post job has its own concurrency group, the gemini job's name plus -post, cancelled by a newer post job",
+          groups[0] and groups[1] and groups[1][0] == groups[0][0].replace("-${{", "-post-${{", 1) != groups[0][0]
+          and "      cancel-in-progress: true" in post, groups)
     out = mapping(gem, "outputs")
     check(f"63.6 {name}: the gemini job outputs the uploaded artifact's id",
           out.get("artifact_id") == "${{ steps.upload.outputs.artifact-id }}", out)

@@ -163,8 +163,8 @@ CHANGES = [
     ("          AUTH_SCHEME: key\n", "          AUTH_SCHEME: bearer\n", 1),
     # Its own concurrency group: with gemini-review.yml's, a repo running both
     # had one cancel the other's run on the same pull request (seen live).
-    # Twice: the gemini job and the post job share one group.
-    ("      group: gemini-review-${{", "      group: gemini-review-vertex-${{", 2),
+    ("      group: gemini-review-${{", "      group: gemini-review-vertex-${{", 1),
+    ("      group: gemini-review-post-${{", "      group: gemini-review-vertex-post-${{", 1),
     ("      - name: Call Gemini API\n", AUTH_STEP, 1),
 ]
 
