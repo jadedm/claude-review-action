@@ -338,7 +338,9 @@ jobs:
         uses: ./.claude-review-action/actions/slack-notify
         with:
           webhook_url: ${{ secrets.slack_webhook_url }}
+          # The action escapes the title and puts it where {title} is (#62, #75).
+          title: ${{ github.event.pull_request.title }}
           message: |
-            🤖 *Claude* on PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+            🤖 *Claude* on PR #${{ github.event.pull_request.number }}: {title}
             Repo: ${{ github.repository }} | Status: ${{ steps.skipped.outputs.reviewed == 'false' && '⚠️ Not reviewed (see the comment on the PR)' || (job.status == 'success' && '✅ Completed' || '❌ Failed') }}
             <${{ github.event.pull_request.html_url }}|View PR>

@@ -668,8 +668,10 @@ jobs:
         uses: ./.claude-review-action/actions/slack-notify
         with:
           webhook_url: ${{ secrets.slack_webhook_url }}
+          # The action escapes the title and puts it where {title} is (#62, #75).
+          title: ${{ github.event.pull_request.title }}
           message: |
-            💎 *Gemini* reviewed PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}
+            💎 *Gemini* reviewed PR #${{ github.event.pull_request.number }}: {title}
             Repo: ${{ github.repository }} | Assessment: ${{ steps.post-review.outputs.assessment || 'error' }} | Issues: ${{ steps.post-review.outputs.issue_count || '?' }}
             <${{ github.event.pull_request.html_url }}|View PR>
 
