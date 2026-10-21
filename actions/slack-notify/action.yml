@@ -7,7 +7,20 @@ inputs:
     description: Slack webhook URL
   message:
     required: true
-    description: Message text to send
+    description: >-
+      Message text to send, in Slack mrkdwn. Each {title} in it is replaced
+      by the title input, escaped.
+  title:
+    required: false
+    default: ""
+    description: >-
+      Pull request title. Control characters become spaces, a title over
+      200 characters (counted as Unicode code points) keeps its first 200
+      and gets "..." added, and &, < and > are escaped, so it cannot carry
+      <...> markup: a user, channel or group mention, or a link with its own
+      label. Slack still applies * _ ~ ` formatting and still links a bare
+      URL as written. Put {title} in the message where it goes, rather than
+      putting the raw title in the message.
 
 runs:
   using: composite
@@ -17,6 +30,7 @@ runs:
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.webhook_url }}
         INPUT_MESSAGE: ${{ inputs.message }}
+        INPUT_TITLE: ${{ inputs.title }}
       run: |
         if [ -z "$SLACK_WEBHOOK_URL" ]; then
           echo "::warning::SLACK_WEBHOOK_URL is empty — skipping notification"
@@ -32,7 +46,17 @@ runs:
           echo "::warning::SLACK_WEBHOOK_URL holds a quote, backslash or whitespace — skipping notification"
           exit 0
         fi
-        PAYLOAD=$(jq -n --arg text "$INPUT_MESSAGE" '{text: $text}')
+        # The title is the pull request author's text, and Slack reads <...>
+        # as a mention or a link, so it is made plain before it goes in (#62).
+        # It is cut before escaping, so an escape is never cut in half.
+        # split and join replace {title} in one pass: a title holding
+        # {title} is not expanded again.
+        PAYLOAD=$(jq -n --arg msg "$INPUT_MESSAGE" --arg title "$INPUT_TITLE" '
+          ($title | gsub("[[:cntrl:]]"; " ")) as $t
+          | (if ($t | length) > 200 then $t[:200] + "..." else $t end)
+          | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")
+          | . as $safe
+          | {text: ($msg | split("{title}") | join($safe))}')
         printf 'url = "%s"\n' "$SLACK_WEBHOOK_URL" | curl -sf -K - -X POST \
           -H 'Content-Type: application/json' \
           -d "$PAYLOAD"
