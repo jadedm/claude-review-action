@@ -5,6 +5,8 @@ Runs the real "Say when Claude did not review" step of claude-review.yml in
 bash against a stub `gh` that serves the pull request's files and comments
 from a state file and records what is posted. Standard library only.
 """
+import hashlib
+import hmac
 import json
 import os
 import pathlib
@@ -15,7 +17,17 @@ import tempfile
 
 HERE = pathlib.Path(__file__).resolve().parent
 WORKFLOW = HERE.parent / ".github/workflows/claude-review.yml"
-MARKER = "<!-- claude-review-action: not reviewed -->"
+OLD_MARKER = "<!-- claude-review-action: not reviewed -->"
+KEY = "sk-ant-oat01-test-key"
+
+
+def keyed(key=KEY, repo="o/r", pr="7"):
+    """The marker the step should write, computed here independently (#68)."""
+    tag = hmac.new(key.encode(), f"not reviewed {repo}#{pr}".encode(), hashlib.sha256).hexdigest()[:32]
+    return f"<!-- claude-review-action: not reviewed {tag} -->"
+
+
+MARKER = keyed()
 
 passed = failed = 0
 
@@ -70,7 +82,7 @@ for n in range(pages):
 '''
 
 
-def run(files, comments=(), fail=False, pages=1):
+def run(files, comments=(), fail=False, pages=1, key=KEY, pr="7"):
     work = pathlib.Path(tempfile.mkdtemp())
     (work / "bin").mkdir()
     (work / "bin/gh").write_text(STUB)
@@ -79,7 +91,7 @@ def run(files, comments=(), fail=False, pages=1):
     state.write_text(json.dumps({"files": list(files), "comments": [list(c) for c in comments], "posted": [], "fail": fail, "pages": pages}))
     out = work / "out"
     env = dict(os.environ, PATH=f"{work / 'bin'}:{os.environ['PATH']}", STUB_STATE=str(state), GITHUB_OUTPUT=str(out),
-               RUNNER_TEMP=str(work), GH_TOKEN="t", REPO="o/r", PR_NUMBER="7")
+               RUNNER_TEMP=str(work), GH_TOKEN="t", REPO="o/r", PR_NUMBER=pr, MARKER_KEY=key)
     p = subprocess.run(["bash", "-e", "-c", SCRIPT], cwd=work, env=env, capture_output=True, text=True)
     posted = json.loads(state.read_text())["posted"]
     output = out.read_text() if out.exists() else ""
@@ -107,6 +119,29 @@ p, posted, output = run([".github/workflows/claude.yml"], fail=True)
 check("15.5 a failing gh call fails the step instead of passing quietly", p.returncode != 0 and posted == [], (p.returncode, p.stderr[-200:]))
 p, posted, output = run([".github/workflows/claude.yml"], comments=[("pr-author", f"{MARKER} planted by someone else")])
 check("15.6 a marker posted by anyone but the workflow does not silence the notice", len(posted) == 1, (p.stdout, posted))
+print("the notice's own marker (#68)")
+# Notices the step itself writes for another pull request and with another key.
+_, other_pr, _ = run(["src/a.py"], pr="8")
+_, other_key, _ = run(["src/a.py"], key="another-key")
+_, same, _ = run(["src/a.py"])
+check("68.2 the step's own notice from an earlier run, same key and pull request, silences the next one",
+      run(["src/a.py"], comments=[("github-actions[bot]", same[0])])[1] == [], same)
+for label, body in (("68.3 the old fixed marker", f"{OLD_MARKER}\n\n**Claude did not review this pull request.** old"),
+                    ("68.4 the notice the step wrote on another pull request", other_pr[0]),
+                    ("68.5 the notice the step wrote with a different key", other_key[0])):
+    p, posted, output = run(["src/a.py"], comments=[("github-actions[bot]", body)])
+    check(f"{label}, in a github-actions[bot] comment, does not silence the notice",
+          p.returncode == 0 and posted == same, (p.stdout, posted))
+p, posted, output = run(["src/a.py"], comments=[("github-actions[bot]", keyed(key=""))], key="")
+check("68.7 no key: the earlier-notice check is skipped and the notice is posted",
+      p.returncode == 0 and len(posted) == 1 and "not checking for an earlier notice" in p.stdout, (p.stdout, posted))
+notice = WORKFLOW.read_text().split("      - name: Say when Claude did not review", 1)[1].split("\n      - name:", 1)[0]
+check("68.8 the key comes in through env only and the script never prints it",
+      "          MARKER_KEY: ${{ secrets.claude_oauth_token }}" in notice and "secrets." not in SCRIPT
+      and not any("echo" in l and "MARKER_KEY" in l and "-z" not in l for l in SCRIPT.splitlines()), notice[-600:])
+tags = {keyed(), keyed(pr="8"), keyed(key="other"), keyed(repo="o/s")}
+check("68.9 the marker value is 32 hex characters and differs by pull request, repository and key",
+      len(tags) == 4 and all(len(m.split()[-2]) == 32 and int(m.split()[-2], 16) >= 0 for m in tags), tags)
 p, posted, output = run(["a.py", "b.py", ".github/workflows/claude.yml", "c.py"], pages=3,
                         comments=[("x", "a"), ("github-actions[bot]", MARKER), ("y", "b")])
 check("15.8 counts are summed across pages: the marker on page 2 is seen",
@@ -192,7 +227,8 @@ if shutil.which("jq") and len(filters) == 1:
         return subprocess.run(["jq", f], input=json.dumps(data), capture_output=True, text=True).stdout.strip()
     check("15.7 the real comment filter counts marker comments",
           jq(marker_filter, [{"body": "x", "user": {"login": "github-actions[bot]"}}, {"body": MARKER + " old", "user": {"login": "github-actions[bot]"}},
-                             {"body": MARKER, "user": {"login": "someone"}}]) == "1", marker_filter)
+                             {"body": MARKER, "user": {"login": "someone"}}, {"body": OLD_MARKER, "user": {"login": "github-actions[bot]"}},
+                             {"body": keyed(pr="8"), "user": {"login": "github-actions[bot]"}}]) == "1", marker_filter)
 else:
     check("15.7 jq available and the comment filter found", False, (shutil.which("jq"), filters))
 

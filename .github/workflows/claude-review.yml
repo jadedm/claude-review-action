@@ -27,6 +27,10 @@ on:
         description: 'Optional path (relative to the consumer repo root) to a markdown file whose contents are appended after the stack prompt — e.g. .github/review-extras.md. Cleaner than a multi-line YAML string for long-form repo-specific conventions. If both extra_prompt and extra_prompt_path are set, both are appended (file contents first, then inline string).'
         type: string
         default: ''
+      require_role_on_private:
+        description: 'On a private repo, start a review from an @claude comment only when its author is an owner, member or collaborator, as on a public repo. Off by default: author_association can report a member whose organisation membership is private as CONTRIBUTOR or NONE (#64)'
+        type: boolean
+        default: false
     secrets:
       claude_oauth_token:
         required: true
@@ -37,17 +41,21 @@ jobs:
   claude:
     # On a public repo anyone can comment, and each comment spends the
     # caller's API quota; only people with a role in the repo may trigger it.
-    # Private repos skip the check: only people with access can comment, and
-    # author_association can misreport private org membership.
+    # Private repos skip the check unless require_role_on_private is set: only
+    # people with access can comment, and author_association can misreport
+    # private org membership (#64).
+    # A comment counts only when it is new: an edited or deleted one would
+    # bill another review.
     if: >
       github.event_name == 'pull_request' ||
+      (github.event.action == 'created' &&
       ((github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
         contains(github.event.comment.body, '@claude')) ||
        (github.event_name == 'pull_request_review_comment' &&
         contains(github.event.comment.body, '@claude'))) &&
-      (github.event.repository.private ||
-       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+      ((github.event.repository.private && !inputs.require_role_on_private) ||
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)))
     runs-on: ${{ fromJSON(inputs.runner) }}
     concurrency:
       group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
@@ -262,18 +270,31 @@ jobs:
         # other early exit. This rests on the pinned action (v1.0.251): a run
         # sets conclusion only on success (src/entrypoints/run.ts:315), and a
         # failed run throws, turning the step red. Recheck when the pin moves.
+        #
+        # Claude posts as github-actions[bot] too (#66), so login and a fixed
+        # marker could not tell this notice from a Claude comment quoting it
+        # (#68). The marker carries an HMAC of the repository and pull request
+        # keyed with the OAuth secret, which Claude never sees; it differs per
+        # pull request, so one seen elsewhere does not count here.
         if: success() && steps.claude-review.outputs.conclusion == ''
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          MARKER_KEY: ${{ secrets.claude_oauth_token }}
         run: |
           set -euo pipefail
           echo "reviewed=false" >> "$GITHUB_OUTPUT"
-          marker="<!-- claude-review-action: not reviewed -->"
+          tag=$(python3 -I -c 'import hmac, os; print(hmac.new(os.environ["MARKER_KEY"].encode(), ("not reviewed " + os.environ["REPO"] + "#" + os.environ["PR_NUMBER"]).encode(), "sha256").hexdigest()[:32])')
+          marker="<!-- claude-review-action: not reviewed ${tag} -->"
           count() { awk '{ n += $1 } END { print n + 0 }'; }  # --paginate prints one count per page
-          said=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
-            --jq "[.[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\")))] | length" | count)
+          said=0
+          if [ -z "$MARKER_KEY" ]; then
+            echo "No key for the marker; not checking for an earlier notice."
+          else
+            said=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments" \
+              --jq "[.[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\")))] | length" | count)
+          fi
           why="claude-code-action stopped before reviewing; this run's log says why."
           echo "::warning::Claude did not review this pull request. ${why}"
           if [ "$said" -gt 0 ]; then
