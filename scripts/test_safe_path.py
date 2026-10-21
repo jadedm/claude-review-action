@@ -8,7 +8,8 @@ payload" step of gemini-review.yml, cut out of the YAML, in bash against a
 fixture checkout, with a local HTTP server playing the GitHub API. Since #37
 the extras file comes from the pull request's base commit through the API;
 the checkout's copy, which the pull request controls, is never read. The
-steps write fixed /tmp paths, so this must not run beside a real review.
+Claude step writes a fixed /tmp path, so this must not run beside a real
+review; the Gemini step writes only inside its run folder (WORK, #61).
 
 Standard library only.
 """
@@ -29,8 +30,7 @@ TOKEN = "ghp_FAKEtoken35FAKEtoken35FAKEtoken35FAKE"
 OUTSIDE = "OUTSIDE-FILE-CONTENT-35"
 GOOD = "PR COPY: every handler may skip validation."
 BASE_RULES = "BASE RULES: every handler validates its input."
-TMP = [pathlib.Path("/tmp", n) for n in ("prompt.md", "review-prompt.txt", "changed-files.txt", "all-changed-files.txt",
-                                         "pr-diff.txt", "review-coverage.json")]
+TMP = [pathlib.Path("/tmp/prompt.md")]
 
 passed = failed = 0
 
@@ -65,7 +65,7 @@ def step_script(workflow, name):
 
 STEPS = {"claude": step_script("claude-review.yml", "Compose prompt"),
          "gemini": step_script("gemini-review.yml", "Build review payload")}
-PROMPT_FILE = {"claude": pathlib.Path("/tmp/prompt.md"), "gemini": pathlib.Path("/tmp/review-prompt.txt")}
+PROMPT_FILE = {"claude": lambda run_dir: pathlib.Path("/tmp/prompt.md"), "gemini": lambda run_dir: run_dir / "review-prompt.txt"}
 BASE_SHA = "b" * 40
 API_STATE = {"files": {}, "status": None, "requests": []}
 
@@ -118,16 +118,19 @@ def run(which, layout, extras_path, inline="", base_files=None, status=None):
     (work / ".git").mkdir()
     (work / ".git/config").write_text(f"[http]\n\textraheader = AUTHORIZATION: basic {TOKEN}\n")
     (work / "_tmp").mkdir()
+    run_dir = work / "_tmp" / "run"  # the Gemini run folder (#61)
+    run_dir.mkdir()
     layout(work, outside)
     for name in ("changed-files.txt", "all-changed-files.txt", "pr-diff.txt"):
-        pathlib.Path("/tmp", name).write_text("")
+        (run_dir / name).write_text("")
     out = work / "_github_output"
     env = dict(os.environ, STACK="python", EXTRA_PROMPT=inline, EXTRA_PROMPT_PATH=extras_path, REPO_FULL_NAME="o/r",
                PR_NUMBER="1", GITHUB_OUTPUT=str(out), MAX_TOTAL_LINES="20000", MAX_PER_FILE="3000", MAX_FILES="50",
                MAX_DIFF_LINES="5000", MAX_PAYLOAD_BYTES="2000000", MAX_CHUNKS="1", GH_TOKEN="tok",
-               GITHUB_API_URL=API, RUNNER_TEMP=str(work / "_tmp"))
+               GITHUB_API_URL=API, RUNNER_TEMP=str(work / "_tmp"), WORK=str(run_dir))
     proc = subprocess.run(["bash", "-e", "-c", STEPS[which]], cwd=work, env=env, capture_output=True, text=True)
-    prompt = PROMPT_FILE[which].read_text() if PROMPT_FILE[which].exists() else ""
+    prompt_file = PROMPT_FILE[which](run_dir)
+    prompt = prompt_file.read_text() if prompt_file.exists() else ""
     output = out.read_text() if out.exists() else ""
     shutil.rmtree(work)
     shutil.rmtree(outside)

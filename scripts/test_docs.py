@@ -138,7 +138,7 @@ print("line references")
 # The exact citation in the README, the file, the lines, and text that must be on them.
 CITES = [
     ("`claude-review.yml:147`", "claude-review.yml", 147, 147, "scripts/base_file.py"),
-    ("`gemini-review.yml:308`", "gemini-review.yml", 308, 308, "scripts/base_file.py"),
+    ("`gemini-review.yml:336`", "gemini-review.yml", 336, 336, "scripts/base_file.py"),
     ("`claude-review.yml:72`", "claude-review.yml", 72, 72, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
     ("`:88`", "claude-review.yml", 88, 88, "@3d3c42e5aac5ba805825da76410c181273ba90b1"),
     ("`:179`", "claude-review.yml", 179, 179, "anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9"),

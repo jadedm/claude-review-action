@@ -39,10 +39,10 @@ RUN = STEP.index("        run: |")
 SCRIPT = "\n".join(l[10:] for l in STEP[RUN + 1:]) + "\n"
 
 
-def run(provider="ai_studio", model="gemini-4-argon", project="", location="global", thinking="high"):
+def run(provider="ai_studio", model="gemini-4-argon", project="", location="global", thinking="high", stack="python"):
     out = pathlib.Path(tempfile.mkstemp()[1])
     env = dict(os.environ, PROVIDER=provider, GEMINI_MODEL=model, VERTEX_PROJECT=project, VERTEX_LOCATION=location,
-               THINKING_LEVEL=thinking, GITHUB_OUTPUT=str(out))
+               THINKING_LEVEL=thinking, STACK=stack, GITHUB_OUTPUT=str(out))
     p = subprocess.run(["bash", "-e", "-c", SCRIPT], env=env, capture_output=True, text=True)
     written = out.read_text()
     out.unlink()
@@ -102,6 +102,19 @@ for label, kw, message in REFUSE:
     p, url = run(**kw)
     check(f"{label}: fails, says why, writes no URL", p.returncode != 0 and message in p.stdout and url is None,
           (p.returncode, p.stdout[-200:], url))
+
+print("stack (#58)")
+check("58 the step reads the stack input", "          STACK: ${{ inputs.stack }}" in STEP, STEP[:12])
+for name in ("python", "nestjs-fastify-drizzle", "nope"):
+    p, url = run(stack=name)
+    check(f"58.1/2/9 stack {name!r} passes the check", p.returncode == 0 and url, (p.returncode, p.stdout[-200:]))
+for name in ("../../README", "python/../base", "", "Python", "_gemini-tail", "python\nx", "py thon", "python.md"):
+    p, url = run(stack=name)
+    check(f"58.3-8 stack {name!r}: fails, says why, writes no URL",
+          p.returncode != 0 and "stack must be a prompt name" in p.stdout and url is None, (p.returncode, p.stdout[-200:], url))
+prompts = sorted(f.stem for f in (HERE.parent / "prompts").glob("*.md") if f.stem != "_gemini-tail")
+p_ok = [n for n in prompts if run(stack=n)[0].returncode == 0]
+check("58.11 every shipped prompt name passes", prompts and p_ok == prompts, (prompts, p_ok))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)
