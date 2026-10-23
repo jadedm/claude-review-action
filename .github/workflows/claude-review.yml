@@ -255,13 +255,23 @@ jobs:
         # ("is_error": true, cost 0), and the message naming the cause, such as
         # an expired token, sits in the execution file (#84). The action prints
         # that file only with show_full_output, which also prints every tool
-        # result to the log, so it stays off. This prints the final result
-        # message's subtype and its text (or, for the error subtypes, which have
-        # none, its errors), on one line, capped, and nothing else. The text can
-        # be the model's own words, and GitHub masks only the secrets it knows,
-        # so token shapes are redacted first, as the action's own fallback does
-        # (redactSecrets, src/github/utils/sanitizer.ts). The file is a JSON list
-        # of messages in the pinned action (v1.0.251); recheck when the pin moves.
+        # result to the log, so it stays off. This prints one line from the
+        # final result message, and the model's own words never: the step can
+        # also go red after Claude finished, when a later step of the action
+        # fails ("Post buffered inline comments" runs on always()), and a
+        # result written by the model may carry whatever a pull request got it
+        # to repeat. GitHub masks only the secrets it knows, and no pattern
+        # makes model text safe for a public log. So:
+        # - Claude finished (is_error not true): subtype and turn count only.
+        # - an error before any model call (no usage, no cost): the result
+        #   text, which then comes from Claude Code itself, such as an
+        #   expired-token message. This is the case #84 is for.
+        # - an error after a model call: subtype, turns and the SDK's errors
+        #   list, never the result.
+        # Token shapes are redacted from what is printed all the same, as the
+        # action's own fallback does (redactSecrets, src/github/utils/sanitizer.ts).
+        # The file is a JSON list of messages in the pinned action (v1.0.251);
+        # recheck when the pin moves.
         if: failure() && steps.claude-review.outcome == 'failure'
         env:
           EXECUTION_FILE: ${{ steps.claude-review.outputs.execution_file }}
@@ -287,14 +297,27 @@ jobs:
               say("The execution file has no result message, so Claude Code exited without one; the lines above say what it printed.")
               sys.exit(0)
           last = results[-1]
+          def clean(value):
+              text = TOKENS.sub("[redacted]", " ".join(str(value).split()))
+              return text[:cap] + " (cut)" if len(text) > cap else text
+          subtype = clean(last.get("subtype") or "unknown")[:60]
+          turns = last.get("num_turns")
+          turns = turns if isinstance(turns, int) and not isinstance(turns, bool) else "unknown"
+          usage = last.get("usage") if isinstance(last.get("usage"), dict) else {}
+          cost = last.get("total_cost_usd")
+          # Fails closed: only a cost of exactly 0 and an empty modelUsage, both
+          # present, count as no model call.
+          no_model_call = (type(cost) in (int, float) and cost == 0 and last.get("modelUsage") == {}
+                           and not any(v != 0 for k, v in usage.items() if k.endswith("tokens")))
+          if last.get("is_error") is not True:
+              say(f"{subtype}, {turns} turns: Claude finished, and a later step of claude-code-action failed; its lines above say why.")
+              sys.exit(0)
           errors = last.get("errors")
-          if isinstance(errors, list):
-              errors = " ".join(map(str, errors))
-          text = last.get("result") or errors or "no message"
-          text = TOKENS.sub("[redacted]", " ".join(str(text).split()))
-          if len(text) > cap:
-              text = text[:cap] + " (cut)"
-          say(f"{last.get('subtype') or 'unknown'}: {text}")
+          errors = " ".join(map(str, errors)) if isinstance(errors, list) else (errors if isinstance(errors, str) else "")
+          if no_model_call:
+              say(f"{subtype}, {turns} turns, before any model call: {clean(last.get('result') or errors or 'no message')}")
+              sys.exit(0)
+          say(f"{subtype}, {turns} turns, after the model ran: {clean(errors) if errors else 'no errors listed'}. The model's text is not printed.")
           PY
 
       - name: Install GitHub CLI

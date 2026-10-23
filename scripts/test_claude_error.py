@@ -37,22 +37,32 @@ run_at = STEP.index("        run: |")
 SCRIPT = "\n".join(l[10:] for l in STEP[run_at + 1:]) + "\n"
 IF = next(l.strip() for l in STEP if l.strip().startswith("if:"))
 
+NOCALL = {"total_cost_usd": 0, "modelUsage": {}, "usage": {"input_tokens": 0, "output_tokens": 0}}
+RAN = {"total_cost_usd": 0.42, "modelUsage": {"claude-sonnet-5-5": {"outputTokens": 900}}, "usage": {"output_tokens": 900}}
+
+
+def result(**fields):
+    """A result message; pass NOCALL or RAN fields to say whether the model was called."""
+    return {"type": "result", **fields}
+
+
 ERROR = [
     {"type": "system", "subtype": "init", "model": "claude-sonnet-5-5"},
-    {"type": "result", "subtype": "success", "is_error": True, "duration_ms": 842, "num_turns": 1,
-     "result": "Invalid bearer token\nPlease run /login", "total_cost_usd": 0},
+    result(subtype="success", is_error=True, duration_ms=842, num_turns=1,
+           result="Invalid bearer token\nPlease run /login", **NOCALL),
 ]
 
 
-def run(content=None, named=True):
-    """content: a JSON value to write, a str to write raw, or None for no file."""
+def run(content=None, named=True, path=None):
+    """content: a JSON value to write, a str to write raw, or None for no file. path: EXECUTION_FILE as given."""
     work = pathlib.Path(tempfile.mkdtemp())
-    path = work / "claude-execution-output.json"
+    file = work / "claude-execution-output.json"
     if isinstance(content, str):
-        path.write_text(content)
+        file.write_text(content)
     elif content is not None:
-        path.write_text(json.dumps(content))
-    env = dict(os.environ, RUNNER_TEMP=str(work), EXECUTION_FILE=str(path) if named else "")
+        file.write_text(json.dumps(content))
+    given = path if path is not None else (str(file) if named else "")
+    env = dict(os.environ, RUNNER_TEMP=str(work), EXECUTION_FILE=given)
     p = subprocess.run(["bash", "-e", "-c", SCRIPT], cwd=work, env=env, capture_output=True, text=True)
     shutil.rmtree(work)
     return p
@@ -60,8 +70,9 @@ def run(content=None, named=True):
 
 print("failure reason")
 p = run(ERROR)
-check("84.1 an error result: one annotation with the subtype and the message, newlines folded, exit 0",
-      p.returncode == 0 and p.stdout == f"{TITLE}success: Invalid bearer token Please run /login\n", (p.stdout, p.stderr))
+check("84.1 an error before any model call: the subtype, turns and Claude Code's message, folded to one line, exit 0",
+      p.returncode == 0 and p.stdout == f"{TITLE}success, 1 turns, before any model call: Invalid bearer token Please run /login\n",
+      (p.stdout, p.stderr))
 p = run(ERROR, named=False)
 check("84.2 no execution_file output: falls back to the file in RUNNER_TEMP",
       p.returncode == 0 and "Invalid bearer token" in p.stdout, (p.stdout, p.stderr))
@@ -74,39 +85,65 @@ check("84.4 a file that is not JSON: same message, exit 0",
 p = run([{"type": "system", "subtype": "init"}])
 check("84.5 no result message: says so, exit 0",
       p.returncode == 0 and "no result message" in p.stdout, (p.stdout, p.stderr))
-p = run([{"type": "result", "subtype": "error_during_execution", "is_error": True}])
-check("84.6 a result with no text and no errors: names the subtype",
-      p.returncode == 0 and p.stdout == f"{TITLE}error_during_execution: no message\n", p.stdout)
-p = run([{"type": "result", "subtype": "error_max_turns", "is_error": True, "errors": ["Reached maximum turns", "stopped"]}])
-check("84.14 an error subtype carries its cause in errors: printed",
-      p.returncode == 0 and p.stdout == f"{TITLE}error_max_turns: Reached maximum turns stopped\n", p.stdout)
-p = run([{"type": "result", "subtype": "success", "result": "bad\r\n::set-output name=x::y 100%"}])
+p = run([result(subtype="error_during_execution", is_error=True, **NOCALL)])
+check("84.6 an error before any model call with no text and no errors: says no message",
+      p.returncode == 0 and p.stdout == f"{TITLE}error_during_execution, unknown turns, before any model call: no message\n", p.stdout)
+p = run([result(subtype="error_max_turns", is_error=True, num_turns=30, result="MODEL-WORDS",
+                errors=["Reached maximum turns", "stopped"], **RAN)])
+check("84.14 an error after the model ran: subtype, turns and the errors list, never the result",
+      p.returncode == 0 and "MODEL-WORDS" not in p.stdout
+      and p.stdout == f"{TITLE}error_max_turns, 30 turns, after the model ran: Reached maximum turns stopped. The model's text is not printed.\n",
+      p.stdout)
+p = run([result(subtype="success", is_error=False, num_turns=12, result="MODEL-REVIEW-TEXT ghs_" + "q" * 36, **RAN)])
+check("84.18 Claude finished and a later step of the action failed: the result is not printed",
+      p.returncode == 0 and "MODEL-REVIEW-TEXT" not in p.stdout and "ghs_" not in p.stdout
+      and p.stdout == f"{TITLE}success, 12 turns: Claude finished, and a later step of claude-code-action failed; its lines above say why.\n",
+      p.stdout)
+p = run([result(subtype="success", is_error=True, num_turns=7, result="MODEL-WORDS", **RAN)])
+check("84.19 an error after the model ran with a result and no errors: the result is not printed",
+      p.returncode == 0 and "MODEL-WORDS" not in p.stdout and "no errors listed" in p.stdout, p.stdout)
+for label, fields in (("no cost or usage fields", {}), ("cost 0 but no modelUsage", {"total_cost_usd": 0}),
+                      ("cost 0, empty modelUsage, output tokens", {"total_cost_usd": 0, "modelUsage": {}, "usage": {"output_tokens": 5}}),
+                      ("cost given as a string", {"total_cost_usd": "0", "modelUsage": {}})):
+    p = run([result(subtype="success", is_error=True, result="MODEL-WORDS", **fields)])
+    check(f"84.20 fails closed, {label}: treated as after the model ran, the result is not printed",
+          p.returncode == 0 and "MODEL-WORDS" not in p.stdout and "after the model ran" in p.stdout, p.stdout)
+p = run([result(subtype="success", is_error=True, result="bad\r\n::set-output name=x::y 100%", **NOCALL)])
 check("84.7 text carrying a workflow command prints one escaped line, no second command",
       p.stdout.count("\n") == 1 and p.stdout.count("::error") == 1 and "100%25" in p.stdout
       and "\n::set-output" not in p.stdout, repr(p.stdout))
-p = run([{"type": "result", "subtype": "success", "result": "x" * 2000}])
+p = run(None, path="/nonexistent/a\n::warning::injected\rb")
+check("84.21 say() escapes CR and LF itself: a path carrying them stays on one line",
+      p.stdout.count("\n") == 1 and "%0A::warning::injected%0Db" in p.stdout and "\n::warning" not in p.stdout, repr(p.stdout))
+p = run([result(subtype="success", is_error=True, result="x" * 2000, **NOCALL)])
 check("84.8 long text is cut at 500 characters",
       p.returncode == 0 and "x" * 500 + " (cut)" in p.stdout and "x" * 501 not in p.stdout, len(p.stdout))
-p = run([{"type": "result", "subtype": "success", "result": "first"}, {"type": "assistant"},
-         {"type": "result", "subtype": "error_max_turns", "result": "last"}])
-check("84.9 several result messages: the last one", "error_max_turns: last" in p.stdout and "first" not in p.stdout, p.stdout)
+p = run([result(subtype="success", is_error=True, result="x" * 480 + " ghp_" + "a" * 36 + " tail", **NOCALL)])
+check("84.22 a token across the 500-character cut is redacted first, no part of it printed",
+      p.returncode == 0 and "ghp_" not in p.stdout and "aaaa" not in p.stdout and "[redacted]" in p.stdout, p.stdout[-80:])
+p = run([result(subtype="success", is_error=True, result="first", **NOCALL), {"type": "assistant"},
+         result(subtype="error_max_turns", is_error=True, result="last", **NOCALL)])
+check("84.9 several result messages: the last one", "error_max_turns" in p.stdout and ": last" in p.stdout and "first" not in p.stdout, p.stdout)
 p = run({"type": "result", "result": "not a list"})
 check("84.10 a file that is not a list: says no result message", "no result message" in p.stdout, p.stdout)
 p = run([{"type": "tool_result", "content": "SECRET-TOOL-OUTPUT"}, ERROR[1]])
 check("84.11 prints nothing from the file but the result message", "SECRET-TOOL-OUTPUT" not in p.stdout + p.stderr, p.stdout)
 TOKENS = {"gh": "ghp_" + "a" * 36, "pat": "github_pat_" + "B" * 30, "ant": "sk-ant-oat01-" + "c" * 30,
           "aws": "AKIA" + "D" * 16, "slack": "xoxb-" + "1" * 12, "jwt": "eyJ" + "e" * 12 + ".eyJ" + "f" * 12 + "." + "g" * 12}
-p = run([{"type": "result", "subtype": "success", "is_error": True, "result": "leaked " + " ".join(TOKENS.values()) + " end"}])
+p = run([result(subtype="success", is_error=True, result="leaked " + " ".join(TOKENS.values()) + " end", **NOCALL)])
 check("84.15 token shapes in the text are redacted before printing",
       p.returncode == 0 and not any(v in p.stdout for v in TOKENS.values()) and p.stdout.count("[redacted]") == len(TOKENS)
       and "leaked" in p.stdout and "end" in p.stdout, p.stdout)
 AWS = "AKIA" + "H" * 16
-p = run([{"type": "result", "subtype": "success", "result": "a \x1b[31m" + AWS + " b \\n" + AWS + " c " + "github_pat_" + "J" * 12}])
+p = run([result(subtype="success", is_error=True, result="a \x1b[31m" + AWS + " b \\n" + AWS + " c " + "github_pat_" + "J" * 12, **NOCALL)])
 check("84.16 an AWS key after a colour code or an escaped newline, and a short fine-grained token fragment, are redacted",
       AWS not in p.stdout and "J" * 12 not in p.stdout and p.stdout.count("[redacted]") == 3, repr(p.stdout))
-p = run([{"type": "result", "subtype": "error_during_execution", "errors": "one plain string"}])
+p = run([result(subtype="error_during_execution", is_error=True, errors="one plain string", **RAN)])
 check("84.17 errors as a plain string is printed, not dropped",
-      p.stdout == f"{TITLE}error_during_execution: one plain string\n", p.stdout)
+      "after the model ran: one plain string." in p.stdout, p.stdout)
+p = run([result(subtype="x\n::warning::y" * 20, is_error=True, **NOCALL)])
+check("84.23 a long or multi-line subtype is folded and capped at 60 characters",
+      p.stdout.count("\n") == 1 and len(p.stdout.split("::", 2)[2].split(",")[0]) <= 60, repr(p.stdout[:200]))
 check("84.12 the step runs only when the review step failed",
       IF == "if: failure() && steps.claude-review.outcome == 'failure'", IF)
 run_step = WORKFLOW.read_text().split("      - name: Run Claude review", 1)[1].split("\n      - name:", 1)[0]
