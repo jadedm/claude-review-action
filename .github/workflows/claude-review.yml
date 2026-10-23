@@ -270,8 +270,8 @@ jobs:
           python3 -I - "${EXECUTION_FILE:-$RUNNER_TEMP/claude-execution-output.json}" <<'PY'
           import json, re, sys
           path, cap = sys.argv[1], 500
-          TOKENS = re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|sk-ant-[A-Za-z0-9_-]{20,}"
-                              r"|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|xox[abpsr]-[A-Za-z0-9-]{10,}"
+          TOKENS = re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{11,}|sk-ant-[A-Za-z0-9_-]{20,}"
+                              r"|(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])|xox[abpsr]-[A-Za-z0-9-]{10,}"
                               r"|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
           def say(text):
               text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -288,7 +288,9 @@ jobs:
               sys.exit(0)
           last = results[-1]
           errors = last.get("errors")
-          text = last.get("result") or (" ".join(map(str, errors)) if isinstance(errors, list) else "") or "no message"
+          if isinstance(errors, list):
+              errors = " ".join(map(str, errors))
+          text = last.get("result") or errors or "no message"
           text = TOKENS.sub("[redacted]", " ".join(str(text).split()))
           if len(text) > cap:
               text = text[:cap] + " (cut)"

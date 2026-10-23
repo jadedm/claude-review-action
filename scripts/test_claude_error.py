@@ -100,6 +100,13 @@ p = run([{"type": "result", "subtype": "success", "is_error": True, "result": "l
 check("84.15 token shapes in the text are redacted before printing",
       p.returncode == 0 and not any(v in p.stdout for v in TOKENS.values()) and p.stdout.count("[redacted]") == len(TOKENS)
       and "leaked" in p.stdout and "end" in p.stdout, p.stdout)
+AWS = "AKIA" + "H" * 16
+p = run([{"type": "result", "subtype": "success", "result": "a \x1b[31m" + AWS + " b \\n" + AWS + " c " + "github_pat_" + "J" * 12}])
+check("84.16 an AWS key after a colour code or an escaped newline, and a short fine-grained token fragment, are redacted",
+      AWS not in p.stdout and "J" * 12 not in p.stdout and p.stdout.count("[redacted]") == 3, repr(p.stdout))
+p = run([{"type": "result", "subtype": "error_during_execution", "errors": "one plain string"}])
+check("84.17 errors as a plain string is printed, not dropped",
+      p.stdout == f"{TITLE}error_during_execution: one plain string\n", p.stdout)
 check("84.12 the step runs only when the review step failed",
       IF == "if: failure() && steps.claude-review.outcome == 'failure'", IF)
 run_step = WORKFLOW.read_text().split("      - name: Run Claude review", 1)[1].split("\n      - name:", 1)[0]
