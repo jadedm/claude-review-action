@@ -90,9 +90,9 @@ check("84.6 an error before any model call with no text and no errors: says no m
       p.returncode == 0 and p.stdout == f"{TITLE}error_during_execution, unknown turns, before any model call: no message\n", p.stdout)
 p = run([result(subtype="error_max_turns", is_error=True, num_turns=30, result="MODEL-WORDS",
                 errors=["Reached maximum turns", "stopped"], **RAN)])
-check("84.14 an error after the model ran: subtype, turns and the errors list, never the result",
-      p.returncode == 0 and "MODEL-WORDS" not in p.stdout
-      and p.stdout == f"{TITLE}error_max_turns, 30 turns, after the model ran: Reached maximum turns stopped. The model's text is not printed.\n",
+check("84.14 an error after the model ran: subtype and turns only, neither the result nor the errors list",
+      p.returncode == 0 and "MODEL-WORDS" not in p.stdout and "Reached maximum turns" not in p.stdout
+      and p.stdout == f"{TITLE}error_max_turns, 30 turns, after the model ran. Neither the model's text nor the error text is printed here; the action's own lines above give its errors.\n",
       p.stdout)
 p = run([result(subtype="success", is_error=False, num_turns=12, result="MODEL-REVIEW-TEXT ghs_" + "q" * 36, **RAN)])
 check("84.18 Claude finished and a later step of the action failed: the result is not printed",
@@ -101,7 +101,7 @@ check("84.18 Claude finished and a later step of the action failed: the result i
       p.stdout)
 p = run([result(subtype="success", is_error=True, num_turns=7, result="MODEL-WORDS", **RAN)])
 check("84.19 an error after the model ran with a result and no errors: the result is not printed",
-      p.returncode == 0 and "MODEL-WORDS" not in p.stdout and "no errors listed" in p.stdout, p.stdout)
+      p.returncode == 0 and "MODEL-WORDS" not in p.stdout and "after the model ran" in p.stdout, p.stdout)
 for label, fields in (("no cost or usage fields", {}), ("cost 0 but no modelUsage", {"total_cost_usd": 0}),
                       ("cost 0, empty modelUsage, output tokens", {"total_cost_usd": 0, "modelUsage": {}, "usage": {"output_tokens": 5}}),
                       ("cost given as a string", {"total_cost_usd": "0", "modelUsage": {}})):
@@ -121,7 +121,7 @@ check("84.8 long text is cut at 500 characters",
 p = run([result(subtype="success", is_error=True, result="x" * 480 + " ghp_" + "a" * 36 + " tail", **NOCALL)])
 check("84.22 a token across the 500-character cut is redacted first, no part of it printed",
       p.returncode == 0 and "ghp_" not in p.stdout and "aaaa" not in p.stdout and "[redacted]" in p.stdout, p.stdout[-80:])
-p = run([result(subtype="success", is_error=True, result="first", **NOCALL), {"type": "assistant"},
+p = run([result(subtype="success", is_error=True, result="first", **NOCALL), {"type": "system", "subtype": "status"},
          result(subtype="error_max_turns", is_error=True, result="last", **NOCALL)])
 check("84.9 several result messages: the last one", "error_max_turns" in p.stdout and ": last" in p.stdout and "first" not in p.stdout, p.stdout)
 p = run({"type": "result", "result": "not a list"})
@@ -138,9 +138,17 @@ AWS = "AKIA" + "H" * 16
 p = run([result(subtype="success", is_error=True, result="a \x1b[31m" + AWS + " b \\n" + AWS + " c " + "github_pat_" + "J" * 12, **NOCALL)])
 check("84.16 an AWS key after a colour code or an escaped newline, and a short fine-grained token fragment, are redacted",
       AWS not in p.stdout and "J" * 12 not in p.stdout and p.stdout.count("[redacted]") == 3, repr(p.stdout))
-p = run([result(subtype="error_during_execution", is_error=True, errors="one plain string", **RAN)])
-check("84.17 errors as a plain string is printed, not dropped",
-      "after the model ran: one plain string." in p.stdout, p.stdout)
+p = run([result(subtype="error_during_execution", is_error=True, errors="one plain string", **NOCALL)])
+check("84.17 before any model call, errors as a plain string is printed, not dropped",
+      "before any model call: one plain string" in p.stdout, p.stdout)
+p = run([result(subtype="error_during_execution", is_error=True, errors=["MCP tool failed: PR-STEERED-NAME"], **RAN)])
+check("84.24 after the model ran, an errors list that may carry tool diagnostics is not printed",
+      p.returncode == 0 and "PR-STEERED-NAME" not in p.stdout and "after the model ran" in p.stdout, p.stdout)
+for kind in ("assistant", "user"):
+    p = run([{"type": "system", "subtype": "init"}, {"type": kind, "message": {"content": "MODEL-ACTIVITY"}},
+             result(subtype="error_during_execution", is_error=True, result="CRASH-TEXT", errors=["CRASH-ERR"], **NOCALL)])
+    check(f"84.25 a zeroed final result after an {kind} message counts as after the model ran: nothing from the result printed",
+          p.returncode == 0 and "CRASH-TEXT" not in p.stdout and "CRASH-ERR" not in p.stdout and "after the model ran" in p.stdout, p.stdout)
 p = run([result(subtype="x\n::warning::y" * 20, is_error=True, **NOCALL)])
 check("84.23 a long or multi-line subtype is folded and capped at 60 characters",
       p.stdout.count("\n") == 1 and len(p.stdout.split("::", 2)[2].split(",")[0]) <= 60, repr(p.stdout[:200]))

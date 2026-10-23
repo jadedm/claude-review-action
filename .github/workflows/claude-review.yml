@@ -263,11 +263,14 @@ jobs:
         # to repeat. GitHub masks only the secrets it knows, and no pattern
         # makes model text safe for a public log. So:
         # - Claude finished (is_error not true): subtype and turn count only.
-        # - an error before any model call (no usage, no cost): the result
-        #   text, which then comes from Claude Code itself, such as an
-        #   expired-token message. This is the case #84 is for.
-        # - an error after a model call: subtype, turns and the SDK's errors
-        #   list, never the result.
+        # - an error before any model call: the result or errors text, which
+        #   then comes from Claude Code itself, such as an expired-token
+        #   message. This is the case #84 is for. A crash can leave a zeroed
+        #   final result after the model ran, so it counts as before any model
+        #   call only when the file also holds no assistant or user message.
+        # - an error after a model call: subtype and turns only. Its errors list
+        #   can carry tool diagnostics a pull request steered, and the action
+        #   already logs that list itself (base-action/src/run-claude-sdk.ts).
         # Token shapes are redacted from what is printed all the same, as the
         # action's own fallback does (redactSecrets, src/github/utils/sanitizer.ts).
         # The file is a JSON list of messages in the pinned action (v1.0.251);
@@ -308,7 +311,8 @@ jobs:
           # Fails closed: only a cost of exactly 0 and an empty modelUsage, both
           # present, count as no model call.
           no_model_call = (type(cost) in (int, float) and cost == 0 and last.get("modelUsage") == {}
-                           and not any(v != 0 for k, v in usage.items() if k.endswith("tokens")))
+                           and not any(v != 0 for k, v in usage.items() if k.endswith("tokens"))
+                           and not any(isinstance(m, dict) and m.get("type") in ("assistant", "user") for m in data))
           if last.get("is_error") is not True:
               say(f"{subtype}, {turns} turns: Claude finished, and a later step of claude-code-action failed; its lines above say why.")
               sys.exit(0)
@@ -317,7 +321,7 @@ jobs:
           if no_model_call:
               say(f"{subtype}, {turns} turns, before any model call: {clean(last.get('result') or errors or 'no message')}")
               sys.exit(0)
-          say(f"{subtype}, {turns} turns, after the model ran: {clean(errors) if errors else 'no errors listed'}. The model's text is not printed.")
+          say(f"{subtype}, {turns} turns, after the model ran. Neither the model's text nor the error text is printed here; the action's own lines above give its errors.")
           PY
 
       - name: Install GitHub CLI
