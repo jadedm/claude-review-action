@@ -66,8 +66,8 @@ p = run(ERROR, named=False)
 check("84.2 no execution_file output: falls back to the file in RUNNER_TEMP",
       p.returncode == 0 and "Invalid bearer token" in p.stdout, (p.stdout, p.stderr))
 p = run(None)
-check("84.3 no file: says the action stopped before Claude ran, exit 0",
-      p.returncode == 0 and p.stdout.startswith(TITLE) and "stopped before Claude ran" in p.stdout, (p.stdout, p.stderr))
+check("84.3 no file: says the action did not write it, exit 0",
+      p.returncode == 0 and p.stdout.startswith(TITLE) and "stopped before writing it, or could not write it" in p.stdout, (p.stdout, p.stderr))
 p = run("{not json")
 check("84.4 a file that is not JSON: same message, exit 0",
       p.returncode == 0 and "No readable execution file" in p.stdout, (p.stdout, p.stderr))
@@ -75,8 +75,11 @@ p = run([{"type": "system", "subtype": "init"}])
 check("84.5 no result message: says so, exit 0",
       p.returncode == 0 and "no result message" in p.stdout, (p.stdout, p.stderr))
 p = run([{"type": "result", "subtype": "error_during_execution", "is_error": True}])
-check("84.6 a result with no text: names the subtype",
+check("84.6 a result with no text and no errors: names the subtype",
       p.returncode == 0 and p.stdout == f"{TITLE}error_during_execution: no message\n", p.stdout)
+p = run([{"type": "result", "subtype": "error_max_turns", "is_error": True, "errors": ["Reached maximum turns", "stopped"]}])
+check("84.14 an error subtype carries its cause in errors: printed",
+      p.returncode == 0 and p.stdout == f"{TITLE}error_max_turns: Reached maximum turns stopped\n", p.stdout)
 p = run([{"type": "result", "subtype": "success", "result": "bad\r\n::set-output name=x::y 100%"}])
 check("84.7 text carrying a workflow command prints one escaped line, no second command",
       p.stdout.count("\n") == 1 and p.stdout.count("::error") == 1 and "100%25" in p.stdout
@@ -91,6 +94,12 @@ p = run({"type": "result", "result": "not a list"})
 check("84.10 a file that is not a list: says no result message", "no result message" in p.stdout, p.stdout)
 p = run([{"type": "tool_result", "content": "SECRET-TOOL-OUTPUT"}, ERROR[1]])
 check("84.11 prints nothing from the file but the result message", "SECRET-TOOL-OUTPUT" not in p.stdout + p.stderr, p.stdout)
+TOKENS = {"gh": "ghp_" + "a" * 36, "pat": "github_pat_" + "B" * 30, "ant": "sk-ant-oat01-" + "c" * 30,
+          "aws": "AKIA" + "D" * 16, "slack": "xoxb-" + "1" * 12, "jwt": "eyJ" + "e" * 12 + ".eyJ" + "f" * 12 + "." + "g" * 12}
+p = run([{"type": "result", "subtype": "success", "is_error": True, "result": "leaked " + " ".join(TOKENS.values()) + " end"}])
+check("84.15 token shapes in the text are redacted before printing",
+      p.returncode == 0 and not any(v in p.stdout for v in TOKENS.values()) and p.stdout.count("[redacted]") == len(TOKENS)
+      and "leaked" in p.stdout and "end" in p.stdout, p.stdout)
 check("84.12 the step runs only when the review step failed",
       IF == "if: failure() && steps.claude-review.outcome == 'failure'", IF)
 run_step = WORKFLOW.read_text().split("      - name: Run Claude review", 1)[1].split("\n      - name:", 1)[0]

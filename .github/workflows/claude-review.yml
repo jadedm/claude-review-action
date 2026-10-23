@@ -256,17 +256,23 @@ jobs:
         # an expired token, sits in the execution file (#84). The action prints
         # that file only with show_full_output, which also prints every tool
         # result to the log, so it stays off. This prints the final result
-        # message's subtype and text, on one line, capped, and nothing else.
-        # The file is a JSON list of messages in the pinned action (v1.0.251);
-        # recheck when the pin moves. GitHub masks the secrets in what it prints.
+        # message's subtype and its text (or, for the error subtypes, which have
+        # none, its errors), on one line, capped, and nothing else. The text can
+        # be the model's own words, and GitHub masks only the secrets it knows,
+        # so token shapes are redacted first, as the action's own fallback does
+        # (redactSecrets, src/github/utils/sanitizer.ts). The file is a JSON list
+        # of messages in the pinned action (v1.0.251); recheck when the pin moves.
         if: failure() && steps.claude-review.outcome == 'failure'
         env:
           EXECUTION_FILE: ${{ steps.claude-review.outputs.execution_file }}
         run: |
           set -euo pipefail
           python3 -I - "${EXECUTION_FILE:-$RUNNER_TEMP/claude-execution-output.json}" <<'PY'
-          import json, sys
+          import json, re, sys
           path, cap = sys.argv[1], 500
+          TOKENS = re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}|sk-ant-[A-Za-z0-9_-]{20,}"
+                              r"|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|xox[abpsr]-[A-Za-z0-9-]{10,}"
+                              r"|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
           def say(text):
               text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
               print("::error title=Claude review failed::" + text)
@@ -274,14 +280,16 @@ jobs:
               with open(path) as f:
                   data = json.load(f)
           except (OSError, ValueError) as e:
-              say(f"No readable execution file at {path} ({type(e).__name__}): the action stopped before Claude ran, and its own lines above say why.")
+              say(f"No readable execution file at {path} ({type(e).__name__}): the action stopped before writing it, or could not write it; its own lines above say why.")
               sys.exit(0)
           results = [m for m in data if isinstance(m, dict) and m.get("type") == "result"] if isinstance(data, list) else []
           if not results:
               say("The execution file has no result message, so Claude Code exited without one; the lines above say what it printed.")
               sys.exit(0)
           last = results[-1]
-          text = " ".join(str(last.get("result") or "no message").split())
+          errors = last.get("errors")
+          text = last.get("result") or (" ".join(map(str, errors)) if isinstance(errors, list) else "") or "no message"
+          text = TOKENS.sub("[redacted]", " ".join(str(text).split()))
           if len(text) > cap:
               text = text[:cap] + " (cut)"
           say(f"{last.get('subtype') or 'unknown'}: {text}")
