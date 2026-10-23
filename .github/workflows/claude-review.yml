@@ -250,6 +250,43 @@ jobs:
             --allowedTools "mcp__github_inline_comment__create_inline_comment"
             --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*),Read(//proc/**),Read(~/.claude/**),Read(~/.config/**),Read(~/.ssh/**),Read(~/.docker/**),Read(~/.git-credentials),Read(~/.gitconfig),Read(~/.aws/**),Read(~/.kube/**),Read(~/.azure/**),Read(~/.gnupg/**),Read(~/.npmrc),Read(~/.netrc),Read(~/.pypirc),Read(//**/_temp/_runner_file_commands/**),Read(//**/_temp/git-credentials-*),Read(//**/.credentials),Read(//**/.credentials_rsaparams),Read(//**/.runner),Read(//**/_diag/**),Read(**/.git/**)" --permission-mode default
 
+      - name: Say why Claude failed
+        # A failed run turns the step above red with only the summary line
+        # ("is_error": true, cost 0), and the message naming the cause, such as
+        # an expired token, sits in the execution file (#84). The action prints
+        # that file only with show_full_output, which also prints every tool
+        # result to the log, so it stays off. This prints the final result
+        # message's subtype and text, on one line, capped, and nothing else.
+        # The file is a JSON list of messages in the pinned action (v1.0.251);
+        # recheck when the pin moves. GitHub masks the secrets in what it prints.
+        if: failure() && steps.claude-review.outcome == 'failure'
+        env:
+          EXECUTION_FILE: ${{ steps.claude-review.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          python3 -I - "${EXECUTION_FILE:-$RUNNER_TEMP/claude-execution-output.json}" <<'PY'
+          import json, sys
+          path, cap = sys.argv[1], 500
+          def say(text):
+              text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print("::error title=Claude review failed::" + text)
+          try:
+              with open(path) as f:
+                  data = json.load(f)
+          except (OSError, ValueError) as e:
+              say(f"No readable execution file at {path} ({type(e).__name__}): the action stopped before Claude ran, and its own lines above say why.")
+              sys.exit(0)
+          results = [m for m in data if isinstance(m, dict) and m.get("type") == "result"] if isinstance(data, list) else []
+          if not results:
+              say("The execution file has no result message, so Claude Code exited without one; the lines above say what it printed.")
+              sys.exit(0)
+          last = results[-1]
+          text = " ".join(str(last.get("result") or "no message").split())
+          if len(text) > cap:
+              text = text[:cap] + " (cut)"
+          say(f"{last.get('subtype') or 'unknown'}: {text}")
+          PY
+
       - name: Install GitHub CLI
         # The notice below calls gh, and self-hosted runners may not have it: a
         # skip then failed with exit 127 and posted nothing (#50). Same script as
