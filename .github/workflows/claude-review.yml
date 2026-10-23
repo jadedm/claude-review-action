@@ -250,6 +250,80 @@ jobs:
             --allowedTools "mcp__github_inline_comment__create_inline_comment"
             --disallowedTools "Edit,MultiEdit,Write,NotebookEdit,mcp__github_file_ops__commit_files,mcp__github_file_ops__delete_files,Bash(git commit:*),Bash(git push:*),Bash(git tag:*),Bash(gh:*),Read(//proc/**),Read(~/.claude/**),Read(~/.config/**),Read(~/.ssh/**),Read(~/.docker/**),Read(~/.git-credentials),Read(~/.gitconfig),Read(~/.aws/**),Read(~/.kube/**),Read(~/.azure/**),Read(~/.gnupg/**),Read(~/.npmrc),Read(~/.netrc),Read(~/.pypirc),Read(//**/_temp/_runner_file_commands/**),Read(//**/_temp/git-credentials-*),Read(//**/.credentials),Read(//**/.credentials_rsaparams),Read(//**/.runner),Read(//**/_diag/**),Read(**/.git/**)" --permission-mode default
 
+      - name: Say why Claude failed
+        # A failed run turns the step above red with only the summary line
+        # ("is_error": true, cost 0), and the message naming the cause, such as
+        # an expired token, sits in the execution file (#84). The action prints
+        # that file only with show_full_output, which also prints every tool
+        # result to the log, so it stays off. This prints one line from the
+        # final result message, and the model's own words never: the step can
+        # also go red after Claude finished, when a later step of the action
+        # fails ("Post buffered inline comments" runs on always()), and a
+        # result written by the model may carry whatever a pull request got it
+        # to repeat. GitHub masks only the secrets it knows, and no pattern
+        # makes model text safe for a public log. So:
+        # - Claude finished (is_error not true): subtype and turn count only.
+        # - an error before any model call: the result or errors text, which
+        #   then comes from Claude Code itself, such as an expired-token
+        #   message. This is the case #84 is for. A crash can leave a zeroed
+        #   final result after the model ran, so it counts as before any model
+        #   call only when the file also holds no assistant or user message.
+        # - an error after a model call: subtype and turns only. Its errors list
+        #   can carry tool diagnostics a pull request steered, and the action
+        #   already logs that list itself (base-action/src/run-claude-sdk.ts).
+        # Token shapes are redacted from what is printed all the same, as the
+        # action's own fallback does (redactSecrets, src/github/utils/sanitizer.ts).
+        # The file is a JSON list of messages in the pinned action (v1.0.251);
+        # recheck when the pin moves.
+        if: failure() && steps.claude-review.outcome == 'failure'
+        env:
+          EXECUTION_FILE: ${{ steps.claude-review.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          python3 -I - "${EXECUTION_FILE:-$RUNNER_TEMP/claude-execution-output.json}" <<'PY'
+          import json, re, sys
+          path, cap = sys.argv[1], 500
+          TOKENS = re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{11,}|sk-ant-[A-Za-z0-9_-]{20,}"
+                              r"|(?<![A-Z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Z0-9])|xox[abpsr]-[A-Za-z0-9-]{10,}"
+                              r"|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}")
+          def say(text):
+              text = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print("::error title=Claude review failed::" + text)
+          try:
+              with open(path) as f:
+                  data = json.load(f)
+          except (OSError, ValueError) as e:
+              say(f"No readable execution file at {path} ({type(e).__name__}): the action stopped before writing it, or could not write it; its own lines above say why.")
+              sys.exit(0)
+          results = [m for m in data if isinstance(m, dict) and m.get("type") == "result"] if isinstance(data, list) else []
+          if not results:
+              say("The execution file has no result message, so Claude Code exited without one; the lines above say what it printed.")
+              sys.exit(0)
+          last = results[-1]
+          def clean(value):
+              text = TOKENS.sub("[redacted]", " ".join(str(value).split()))
+              return text[:cap] + " (cut)" if len(text) > cap else text
+          subtype = clean(last.get("subtype") or "unknown")[:60]
+          turns = last.get("num_turns")
+          turns = turns if isinstance(turns, int) and not isinstance(turns, bool) else "unknown"
+          usage = last.get("usage") if isinstance(last.get("usage"), dict) else {}
+          cost = last.get("total_cost_usd")
+          # Fails closed: only a cost of exactly 0 and an empty modelUsage, both
+          # present, count as no model call.
+          no_model_call = (type(cost) in (int, float) and cost == 0 and last.get("modelUsage") == {}
+                           and not any(v != 0 for k, v in usage.items() if k.endswith("tokens"))
+                           and not any(isinstance(m, dict) and m.get("type") in ("assistant", "user") for m in data))
+          if last.get("is_error") is not True:
+              say(f"{subtype}, {turns} turns: Claude finished, and a later step of claude-code-action failed; its lines above say why.")
+              sys.exit(0)
+          errors = last.get("errors")
+          errors = " ".join(map(str, errors)) if isinstance(errors, list) else (errors if isinstance(errors, str) else "")
+          if no_model_call:
+              say(f"{subtype}, {turns} turns, before any model call: {clean(last.get('result') or errors or 'no message')}")
+              sys.exit(0)
+          say(f"{subtype}, {turns} turns, after the model ran. Neither the model's text nor the error text is printed here; the action's own lines above give its errors.")
+          PY
+
       - name: Install GitHub CLI
         # The notice below calls gh, and self-hosted runners may not have it: a
         # skip then failed with exit 127 and posted nothing (#50). Same script as
