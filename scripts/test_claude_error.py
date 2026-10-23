@@ -108,6 +108,11 @@ for label, fields in (("no cost or usage fields", {}), ("cost 0 but no modelUsag
     p = run([result(subtype="success", is_error=True, result="MODEL-WORDS", **fields)])
     check(f"84.20 fails closed, {label}: treated as after the model ran, the result is not printed",
           p.returncode == 0 and "MODEL-WORDS" not in p.stdout and "after the model ran" in p.stdout, p.stdout)
+for label, fields in (("only a nonzero cost", {"total_cost_usd": 0.01, "modelUsage": {}, "usage": {"output_tokens": 0}}),
+                      ("only a non-empty modelUsage", {"total_cost_usd": 0, "modelUsage": {"m": {}}, "usage": {"output_tokens": 0}})):
+    p = run([result(subtype="success", is_error=True, result="MODEL-WORDS", **fields)])
+    check(f"84.26 {label} counts as after the model ran: the result is not printed",
+          p.returncode == 0 and "MODEL-WORDS" not in p.stdout and "after the model ran" in p.stdout, p.stdout)
 p = run([result(subtype="success", is_error=True, result="bad\r\n::set-output name=x::y 100%", **NOCALL)])
 check("84.7 text carrying a workflow command prints one escaped line, no second command",
       p.stdout.count("\n") == 1 and p.stdout.count("::error") == 1 and "100%25" in p.stdout
